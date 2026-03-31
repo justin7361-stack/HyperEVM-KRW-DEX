@@ -27,16 +27,18 @@ export class FeeEngine {
 
     // Fee in quoteToken: fee = price * amount * bps / 10000
     // price and amount are 18-decimal fixed-point, so divide by 1e18 to get actual quote value
-    const quoteAmount = match.price * match.fillAmount / BigInt(1e18)
+    const quoteAmount = match.price * match.fillAmount / 10n ** 18n
     // makerFee: positive = charged, negative = rebate (stored as actual value, 0 if zero-fee tier)
     const makerFee = makerTier.makerBps !== 0
-      ? quoteAmount * BigInt(Math.abs(makerTier.makerBps)) / 10000n * BigInt(makerTier.makerBps < 0 ? -1 : 1)
+      ? quoteAmount * BigInt(makerTier.makerBps) / 10000n
       : 0n
     const takerFee = quoteAmount * BigInt(takerTier.takerBps) / 10000n
 
     return { ...match, makerFee, takerFee }
   }
 
+  // NOTE: assumes tradedAt values are monotonically non-decreasing.
+  // Out-of-order insertions can cause volume over-counting.
   private updateVolume(maker: string, amount: bigint, tradedAt: number): void {
     const cutoff = tradedAt - 30 * 24 * 3600 * 1000
     // Evict trades older than 30 days

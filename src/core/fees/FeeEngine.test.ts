@@ -86,10 +86,10 @@ describe('FeeEngine', () => {
 
   it('onMatch() sets makerFee and takerFee correctly for Tier 0', () => {
     const feEngine = new FeeEngine(HIGH_THRESHOLD_TIERS)
-    const price = 2n * BigInt(1e18)        // 2.0 in 18-decimal fixed-point
-    const fillAmount = 3n * BigInt(1e18)   // 3.0 base tokens
+    const price = 2n * 10n ** 18n        // 2.0 in 18-decimal fixed-point
+    const fillAmount = 3n * 10n ** 18n   // 3.0 base tokens
     // quoteAmount = price * fillAmount / 1e18 = 2e18 * 3e18 / 1e18 = 6e18
-    const quoteAmount = price * fillAmount / BigInt(1e18)
+    const quoteAmount = price * fillAmount / 10n ** 18n
     // makerFee Tier0: quoteAmount * 1 / 10000
     const expectedMakerFee = quoteAmount * 1n / 10000n
     // takerFee Tier0: quoteAmount * 3 / 10000
@@ -106,14 +106,14 @@ describe('FeeEngine', () => {
     engine.onMatch(makeMatch(1n, 1_000_000n, NOW - 1000))
 
     // Small trade using raw units that won't push maker to Tier 2
-    const price = 2n * BigInt(1e18)
+    const price = 2n * 10n ** 18n
     const fillAmount = 1n
     const result = engine.onMatch(makeMatch(price, fillAmount, NOW))
 
     // Tier 1 makerBps = 0 → makerFee must be 0n
     expect(result.makerFee).toBe(0n)
     // takerFee: Tier 1 takerBps=2, but quoteAmount = 2e18 * 1 / 1e18 = 2
-    const quoteAmount = price * fillAmount / BigInt(1e18)
+    const quoteAmount = price * fillAmount / 10n ** 18n
     expect(result.takerFee).toBe(quoteAmount * 2n / 10000n)
   })
 
@@ -122,16 +122,27 @@ describe('FeeEngine', () => {
     engine.onMatch(makeMatch(1n, 10_000_000n, NOW - 1000))
 
     // Small trade using raw units that keeps maker in Tier 2
-    const price = 2n * BigInt(1e18)
+    const price = 2n * 10n ** 18n
     const fillAmount = 1n
     const result = engine.onMatch(makeMatch(price, fillAmount, NOW))
 
     // Tier 2 makerBps = -1 → makerFee must be negative
-    const quoteAmount = price * fillAmount / BigInt(1e18)
+    const quoteAmount = price * fillAmount / 10n ** 18n
     const expectedRebate = -(quoteAmount * 1n / 10000n)
     expect(result.makerFee).toBe(expectedRebate)
     // takerFee Tier 2: takerBps=1
     expect(result.takerFee).toBe(quoteAmount * 1n / 10000n)
+  })
+
+  // ── Taker volume tracking ───────────────────────────────────────────────────
+
+  it('taker with 10M+ volume qualifies for Tier 2', () => {
+    const TAKER_ADDRESS = '0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
+    // Use a fill of 10_000_000n raw units so the taker crosses the Tier 2 threshold
+    engine.onMatch(makeMatch(1n, 10_000_000n, NOW, {}, { maker: TAKER_ADDRESS as any }))
+    const tier = engine.getTier(TAKER_ADDRESS)
+    expect(tier.makerBps).toBe(-1)
+    expect(tier.takerBps).toBe(1)
   })
 
   // ── Rolling window eviction ─────────────────────────────────────────────────
