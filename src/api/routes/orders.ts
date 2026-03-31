@@ -31,7 +31,17 @@ export function ordersRoutes(
   return async function (fastify: FastifyInstance) {
     // POST /orders — submit a signed order
     fastify.post<{ Body: SubmitOrderBody }>('/orders', async (req, reply) => {
-      const { order, signature, makerIp = req.ip } = req.body
+      const { signature, makerIp = req.ip } = req.body
+
+      // Convert JSON numbers/strings to bigint (HTTP JSON doesn't have bigint type)
+      const parsedOrder: Order = {
+        ...req.body.order,
+        price:  BigInt(req.body.order.price as unknown as string),
+        amount: BigInt(req.body.order.amount as unknown as string),
+        nonce:  BigInt(req.body.order.nonce as unknown as string),
+        expiry: BigInt(req.body.order.expiry as unknown as string),
+      }
+      const order = parsedOrder
 
       // 1. Expiry check
       const now = BigInt(Math.floor(Date.now() / 1000))
