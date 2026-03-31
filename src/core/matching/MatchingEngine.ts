@@ -2,6 +2,7 @@ import { EventEmitter } from 'events'
 import type { MatchResult, StoredOrder } from '../../types/order.js'
 import type { IOrderBookStore } from '../orderbook/IOrderBookStore.js'
 import { OrderBook } from '../orderbook/OrderBook.js'
+import type { FeeEngine } from '../fees/FeeEngine.js'
 
 // Events emitted:
 //   'matched'  (result: MatchResult)    — one per fill
@@ -10,7 +11,10 @@ import { OrderBook } from '../orderbook/OrderBook.js'
 export class MatchingEngine extends EventEmitter {
   private readonly orderbooks = new Map<string, OrderBook>()
 
-  constructor(private readonly store: IOrderBookStore) {
+  constructor(
+    private readonly store: IOrderBookStore,
+    private readonly feeEngine?: FeeEngine,
+  ) {
     super()
   }
 
@@ -30,7 +34,8 @@ export class MatchingEngine extends EventEmitter {
     }
     const book = this.getOrCreateBook(pairId)
     const matches = await book.submit(order)
-    for (const match of matches) {
+    for (let match of matches) {
+      if (this.feeEngine) match = this.feeEngine.onMatch(match)
       this.emit('matched', match)
       this.emit('price', pairId, match.price)
     }
