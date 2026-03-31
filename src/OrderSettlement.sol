@@ -53,7 +53,7 @@ contract OrderSettlement is
         address maker;
         address quoteToken; // token transferred (KRW stablecoin)
         int256  amount;     // scaled by 1e18; positive = receives, negative = pays
-        string  pairId;
+        bytes32 pairId;
         uint256 timestamp;
     }
 
@@ -78,7 +78,7 @@ contract OrderSettlement is
     event OrderCancelled(address indexed user, uint256 nonce);
     event ComplianceUpdated(address indexed newModule);
     event TakerFeeUpdated(uint256 newFeeBps);
-    event FundingSettled(address indexed maker, address indexed quoteToken, int256 amount, string pairId);
+    event FundingSettled(address indexed maker, address indexed quoteToken, int256 amount, bytes32 pairId);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -227,10 +227,11 @@ contract OrderSettlement is
 
     /// @dev Best-effort single funding payment. Silently skips on failure.
     function _trySettleFunding(FundingPayment calldata payment, address reserve) internal {
-        if (payment.amount == 0) return;
-        if (payment.maker == address(0)) return;
-        if (payment.quoteToken == address(0)) return;
-
+        if (payment.amount == 0 || payment.maker == address(0) || payment.quoteToken == address(0)) return;
+        // Reject payments older than 9 hours (one funding interval + 1h grace)
+        if (block.timestamp > payment.timestamp + 9 hours) return;
+        // Guard: -type(int256).min would overflow; skip this pathological value
+        if (payment.amount == type(int256).min) return;
         try this._externalSettleFunding(payment, reserve) {} catch {}
     }
 
@@ -239,6 +240,8 @@ contract OrderSettlement is
         FundingPayment calldata payment,
         address reserve
     ) external {
+        // This function must remain `external` to support `try this._externalSettleFunding()`.
+        // The msg.sender guard is the sole access control — do NOT remove or weaken it.
         require(msg.sender == address(this), "Internal only");
 
         if (payment.amount > 0) {

@@ -88,14 +88,13 @@ contract OrderSettlementFundingTest is Test {
             maker: makerA,
             quoteToken: address(krw),
             amount: int256(100 ether),
-            pairId: "ETH/KRW",
+            pairId: keccak256("ETH/KRW"),
             timestamp: block.timestamp
         });
 
         uint256 reserveBefore = krw.balanceOf(reserve);
         uint256 makerABefore  = krw.balanceOf(makerA);
 
-        bytes32 opRole = settlement.OPERATOR_ROLE();
         vm.prank(operator);
         settlement.settleFunding(payments, reserve);
 
@@ -110,14 +109,13 @@ contract OrderSettlementFundingTest is Test {
             maker: makerA,
             quoteToken: address(krw),
             amount: -int256(50 ether),
-            pairId: "ETH/KRW",
+            pairId: keccak256("ETH/KRW"),
             timestamp: block.timestamp
         });
 
         uint256 reserveBefore = krw.balanceOf(reserve);
         uint256 makerABefore  = krw.balanceOf(makerA);
 
-        bytes32 opRole = settlement.OPERATOR_ROLE();
         vm.prank(operator);
         settlement.settleFunding(payments, reserve);
 
@@ -130,14 +128,13 @@ contract OrderSettlementFundingTest is Test {
         OrderSettlement.FundingPayment[] memory payments = new OrderSettlement.FundingPayment[](2);
         payments[0] = OrderSettlement.FundingPayment({
             maker: makerA, quoteToken: address(krw),
-            amount: int256(100 ether), pairId: "ETH/KRW", timestamp: block.timestamp
+            amount: int256(100 ether), pairId: keccak256("ETH/KRW"), timestamp: block.timestamp
         });
         payments[1] = OrderSettlement.FundingPayment({
             maker: makerB, quoteToken: address(krw),
-            amount: -int256(75 ether), pairId: "ETH/KRW", timestamp: block.timestamp
+            amount: -int256(75 ether), pairId: keccak256("ETH/KRW"), timestamp: block.timestamp
         });
 
-        bytes32 opRole = settlement.OPERATOR_ROLE();
         vm.prank(operator);
         settlement.settleFunding(payments, reserve);
 
@@ -151,12 +148,11 @@ contract OrderSettlementFundingTest is Test {
         OrderSettlement.FundingPayment[] memory payments = new OrderSettlement.FundingPayment[](1);
         payments[0] = OrderSettlement.FundingPayment({
             maker: makerA, quoteToken: address(krw),
-            amount: 0, pairId: "ETH/KRW", timestamp: block.timestamp
+            amount: 0, pairId: keccak256("ETH/KRW"), timestamp: block.timestamp
         });
 
         uint256 makerABefore = krw.balanceOf(makerA);
 
-        bytes32 opRole = settlement.OPERATOR_ROLE();
         vm.prank(operator);
         settlement.settleFunding(payments, reserve);
 
@@ -174,24 +170,28 @@ contract OrderSettlementFundingTest is Test {
         OrderSettlement.FundingPayment[] memory payments = new OrderSettlement.FundingPayment[](1);
         payments[0] = OrderSettlement.FundingPayment({
             maker: makerA, quoteToken: address(krw),
-            amount: int256(100 ether), pairId: "ETH/KRW", timestamp: block.timestamp
+            amount: int256(100 ether), pairId: keccak256("ETH/KRW"), timestamp: block.timestamp
         });
 
         vm.expectEmit(true, true, false, true);
-        emit OrderSettlement.FundingSettled(makerA, address(krw), int256(100 ether), "ETH/KRW");
+        emit OrderSettlement.FundingSettled(makerA, address(krw), int256(100 ether), keccak256("ETH/KRW"));
 
-        bytes32 opRole = settlement.OPERATOR_ROLE();
         vm.prank(operator);
         settlement.settleFunding(payments, reserve);
     }
 
+    function test_settleFunding_zeroReserve_reverts() public {
+        OrderSettlement.FundingPayment[] memory p = new OrderSettlement.FundingPayment[](0);
+        vm.prank(operator);
+        vm.expectRevert(bytes("Zero reserve"));
+        settlement.settleFunding(p, address(0));
+    }
+
     function test_settleFunding_paused_reverts() public {
-        bytes32 gRole = settlement.GUARDIAN_ROLE();
         vm.prank(guardian);
         settlement.pause();
 
         OrderSettlement.FundingPayment[] memory payments = new OrderSettlement.FundingPayment[](0);
-        bytes32 opRole = settlement.OPERATOR_ROLE();
         vm.prank(operator);
         vm.expectRevert();
         settlement.settleFunding(payments, reserve);
