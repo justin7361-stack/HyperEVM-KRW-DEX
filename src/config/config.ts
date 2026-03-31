@@ -41,6 +41,7 @@ export interface Config {
   batchTimeoutMs: number
   batchSize: number
   blockedCountries: string[]
+  adminApiKey: string
 }
 
 export function loadConfig(): Config {
@@ -56,5 +57,6 @@ export function loadConfig(): Config {
     batchTimeoutMs:          parseIntOrThrow(optionalEnv('BATCH_TIMEOUT_MS', '1000'), 'BATCH_TIMEOUT_MS'),
     batchSize:               parseIntOrThrow(optionalEnv('BATCH_SIZE', '10'), 'BATCH_SIZE'),
     blockedCountries:        optionalEnv('BLOCKED_COUNTRIES', 'KP,IR,SY,CU').split(','),
+    adminApiKey:             requireEnv('ADMIN_API_KEY'),
   }
 }
