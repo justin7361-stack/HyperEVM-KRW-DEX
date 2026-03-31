@@ -35,6 +35,7 @@ contract FeeCollector is
     function initialize(address admin) external initializer {
         __AccessControl_init();
         __ReentrancyGuard_init();
+        require(admin != address(0), "Zero address");
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
     }
 
@@ -43,11 +44,12 @@ contract FeeCollector is
     function depositFee(address token, uint256 amount)
         external
         onlyRole(DEPOSITOR_ROLE)
+        nonReentrant
     {
         require(token != address(0), "Zero address");
         require(amount > 0, "Zero amount");
+        accumulatedFees[token] += amount;  // Effect before Interaction
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
-        accumulatedFees[token] += amount;
         emit FeeDeposited(token, amount);
     }
 

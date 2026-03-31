@@ -41,6 +41,7 @@ contract OracleAdmin is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     function initialize(address admin) external initializer {
         __AccessControl_init();
+        require(admin != address(0), "Zero address");
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
     }
 

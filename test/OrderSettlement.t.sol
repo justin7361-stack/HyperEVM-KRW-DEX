@@ -76,10 +76,11 @@ contract OrderSettlementTest is Test {
         )));
 
         // Setup roles
+        bytes32 depositorRole = feeCollector.DEPOSITOR_ROLE();
         vm.startPrank(admin);
         registry.addToken(address(baseToken), false, false);
         registry.addPair(address(baseToken), address(krwStable), 1e14, 1e15, 1e17, 1_000_000e18);
-        feeCollector.grantRole(feeCollector.DEPOSITOR_ROLE(), address(settlement));
+        feeCollector.grantRole(depositorRole, address(settlement));
         vm.stopPrank();
 
         // Fund accounts + approvals

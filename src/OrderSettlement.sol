@@ -90,6 +90,8 @@ contract OrderSettlement is
         __EIP712_init("KRW DEX", "1");
 
         require(admin != address(0),         "Zero address");
+        require(operator != address(0),      "Zero address");
+        require(guardian != address(0),      "Zero address");
         require(_compliance != address(0),   "Zero address");
         require(_pairRegistry != address(0), "Zero address");
         require(_feeCollector != address(0), "Zero address");
@@ -196,6 +198,7 @@ contract OrderSettlement is
     //  Internal
     // ─────────────────────────────────────────────
 
+    /// @dev Attempts to settle a single order pair; silently skips on failure (used in batch).
     function _trySettle(
         Order calldata makerOrder,
         Order calldata takerOrder,
@@ -219,6 +222,7 @@ contract OrderSettlement is
         _settle(makerOrder, takerOrder, fillAmount, makerSig, takerSig);
     }
 
+    /// @dev Core settlement logic. Validates orders, checks compliance, moves tokens. CEI pattern.
     function _settle(
         Order calldata makerOrder,
         Order calldata takerOrder,
@@ -316,10 +320,12 @@ contract OrderSettlement is
         }
     }
 
+    /// @dev Verifies an EIP-712 signature. Reverts with "Invalid maker signature" on failure.
     function _verifySignature(address signer, bytes32 hash, bytes memory sig) internal pure {
         require(ECDSA.recover(hash, sig) == signer, "Invalid maker signature");
     }
 
+    /// @dev Marks a nonce as used in the bitmap. Reverts if already used.
     function _useNonce(address user, uint256 nonce) internal {
         uint256 wordIndex = nonce >> 8;
         uint256 bitIndex  = nonce & 0xff;
