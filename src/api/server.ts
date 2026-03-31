@@ -19,17 +19,19 @@ import { orderbookRoutes } from './routes/orderbook.js'
 import { tradesRoutes, TradeStore } from './routes/trades.js'
 import { streamRoutes } from './websocket/stream.js'
 import { adminRoutes } from '../admin/routes.js'
+import { TraderKeyStore, createTraderAuth, apiKeyManagementRoutes } from './auth/traderAuth.js'
 
 export function buildServer(deps: {
-  config:       Config
-  verifier:     IOrderVerifier
-  policy:       PolicyEngine
-  matching:     MatchingEngine
-  store:        IOrderBookStore
-  trades:       TradeStore
-  pairRegistry: Clients['pairRegistry']
-  worker?:      SettlementWorker
-  blocklist?:   BasicBlocklistPlugin
+  config:          Config
+  verifier:        IOrderVerifier
+  policy:          PolicyEngine
+  matching:        MatchingEngine
+  store:           IOrderBookStore
+  trades:          TradeStore
+  pairRegistry:    Clients['pairRegistry']
+  worker?:         SettlementWorker
+  blocklist?:      BasicBlocklistPlugin
+  traderKeyStore?: TraderKeyStore
 }) {
   const { config, verifier, policy, matching, store, trades, pairRegistry, worker, blocklist } = deps
   const fastify = Fastify({ logger: true })
@@ -52,6 +54,16 @@ export function buildServer(deps: {
       prefix: '/admin/ui',
     })
     fastify.register(adminRoutes({ config, matching, worker, store, blocklist }))
+  }
+
+  if (deps.traderKeyStore) {
+    const auth = createTraderAuth(deps.traderKeyStore, true)
+    fastify.addHook('preHandler', async (req, reply) => {
+      if (['POST', 'PUT', 'DELETE'].includes(req.method) && req.url.startsWith('/orders')) {
+        await auth(req, reply)
+      }
+    })
+    fastify.register(apiKeyManagementRoutes(deps.traderKeyStore, deps.config.adminApiKey))
   }
 
   fastify.get('/health', async () => ({ status: 'ok', ts: Date.now() }))
