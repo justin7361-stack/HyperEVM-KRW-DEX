@@ -152,17 +152,18 @@ describe('LiquidationEngine', () => {
     const submitFn = vi.fn().mockResolvedValue(undefined)
 
     // Import InsuranceFund dynamically or inline a mock
-    // Use a simple mock object that matches the InsuranceFund interface
+    // Use a simple mock object that matches the IInsuranceFund interface
     const coverCalls: Array<{ pairId: string; loss: bigint }> = []
     const mockFund = {
       cover(pairId: string, loss: bigint): boolean {
         coverCalls.push({ pairId, loss })
         return true
-      }
+      },
+      deposit(_pairId: string, _amount: bigint): void {},
+      getBalance(_pairId: string): bigint { return 0n },
     }
 
-    // Cast as any to satisfy the optional param type
-    const engine = new LiquidationEngine(oracle, submitFn, 250n, mockFund as any)
+    const engine = new LiquidationEngine(oracle, submitFn, 250n, mockFund)
 
     // margin=10, minMargin=25 → estimatedLoss = 25-10 = 15
     const pos = makePosition({ margin: 10n })

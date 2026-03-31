@@ -1,5 +1,12 @@
 import { EventEmitter } from 'events'
 
+/** Narrow interface used for dependency injection — avoids coupling to EventEmitter internals */
+export interface IInsuranceFund {
+  cover(pairId: string, loss: bigint): boolean
+  deposit(pairId: string, amount: bigint): void
+  getBalance(pairId: string): bigint
+}
+
 export interface InsuranceFundSnapshot {
   pairId:  string
   balance: bigint

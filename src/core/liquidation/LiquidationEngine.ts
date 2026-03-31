@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events'
 import type { MarginPosition, StoredOrder } from '../../types/order.js'
 import type { MarkPriceOracle } from '../oracle/MarkPriceOracle.js'
-import type { InsuranceFund } from '../insurance/InsuranceFund.js'
+import type { IInsuranceFund } from '../insurance/InsuranceFund.js'
 import { v4 as uuid } from 'uuid'
 import type { Hex } from 'viem'
 
@@ -21,7 +21,7 @@ export class LiquidationEngine extends EventEmitter {
     private readonly oracle:                 MarkPriceOracle,
     private readonly submitFn:               SubmitFn,
     private readonly maintenanceMarginBps = 250n,  // 2.5% = 250 bps
-    private readonly insuranceFund?:         InsuranceFund,
+    private readonly insuranceFund?:         IInsuranceFund,
   ) {
     super()
   }
@@ -40,6 +40,7 @@ export class LiquidationEngine extends EventEmitter {
         const posKey = `${pos.maker}:${pos.pairId}`
         const step = this.liquidationSteps.get(posKey) ?? 0
 
+        // step is 0-indexed count of completed liquidations; cap at 5 (steps 0–4 = 5 total)
         if (step >= 5) continue  // max steps reached — needs ADL or manual resolution
 
         const newStep = step + 1
@@ -52,9 +53,13 @@ export class LiquidationEngine extends EventEmitter {
         } satisfies LiquidationEvent)
         await this.submitLiquidationOrder(pos, markPrice)
         if (this.insuranceFund) {
+          // Speculative loss reservation: uses margin shortfall as a proxy for the
+          // actual realised loss. True loss (debt minus liquidation proceeds) is only
+          // known post-settlement. This pre-funds the insurance pool conservatively;
+          // any over-reservation is corrected when the liquidation order settles.
           const estimatedLoss = minMargin - pos.margin
           if (estimatedLoss > 0n) {
-            this.insuranceFund.cover(pos.pairId, estimatedLoss)
+            void this.insuranceFund.cover(pos.pairId, estimatedLoss)
           }
         }
       }
@@ -77,6 +82,7 @@ export class LiquidationEngine extends EventEmitter {
     const partialAmount = absSize * 20n / 100n
     // Fallback: integer truncation would produce 0 for tiny positions
     const amount = partialAmount === 0n ? absSize : partialAmount
+    const now = BigInt(Date.now())
     const closeOrder: StoredOrder = {
       id:           uuid(),
       maker:        LIQUIDATOR,
@@ -86,8 +92,8 @@ export class LiquidationEngine extends EventEmitter {
       price:        0n,
       amount,
       isBuy:        pos.size < 0n,   // short position → buy to close
-      nonce:        BigInt(Date.now()),
-      expiry:       BigInt(Date.now()) / 1000n + 60n,
+      nonce:        now,
+      expiry:       now / 1000n + 60n,
       signature:    '0x' as Hex,
       submittedAt:  Date.now(),
       filledAmount: 0n,
