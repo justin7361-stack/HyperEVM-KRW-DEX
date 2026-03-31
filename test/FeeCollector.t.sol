@@ -75,4 +75,28 @@ contract FeeCollectorTest is Test {
         vm.expectRevert();
         impl.initialize(admin);
     }
+
+    function test_DepositFee_RevertZeroAmount() public {
+        vm.prank(depositor);
+        vm.expectRevert("Zero amount");
+        collector.depositFee(address(token), 0);
+    }
+
+    function test_WithdrawFee_RevertZeroAmount() public {
+        vm.prank(depositor);
+        collector.depositFee(address(token), 100e18);
+
+        vm.prank(admin);
+        vm.expectRevert("Zero amount");
+        collector.withdrawFee(address(token), recipient, 0);
+    }
+
+    function test_WithdrawFee_RevertZeroAddress() public {
+        vm.prank(depositor);
+        collector.depositFee(address(token), 100e18);
+
+        vm.prank(admin);
+        vm.expectRevert("Zero address");
+        collector.withdrawFee(address(token), address(0), 50e18);
+    }
 }

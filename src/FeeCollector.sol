@@ -58,6 +58,7 @@ contract FeeCollector is
         nonReentrant
     {
         require(to != address(0), "Zero address");
+        require(amount > 0, "Zero amount");
         require(accumulatedFees[token] >= amount, "Insufficient fees");
         accumulatedFees[token] -= amount;  // Effect before Interaction
         IERC20(token).safeTransfer(to, amount);
