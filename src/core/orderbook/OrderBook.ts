@@ -45,7 +45,7 @@ export class OrderBook {
       }
 
       // Execute at the limit (resting) order's price
-      const execPrice  = cur.isBuy ? counter.price : cur.price
+      const execPrice = counter.price
       const counterRem = counter.amount - counter.filledAmount
       const fill       = remaining < counterRem ? remaining : counterRem
 

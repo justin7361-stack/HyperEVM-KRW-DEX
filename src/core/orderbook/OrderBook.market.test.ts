@@ -35,6 +35,16 @@ describe('Market Order', () => {
     expect(matches[0].price).toBe(100n)   // executes at limit price
   })
 
+  it('market sell matches limit buy at bid price', async () => {
+    await store.addOrder(makeOrder({ id: 'buy-1', isBuy: true, price: 100n, nonce: 2n }))
+    const matches = await book.submit(
+      makeOrder({ id: 'sell-1', isBuy: false, price: 0n, amount: 10n, orderType: 'market', nonce: 3n })
+    )
+    expect(matches).toHaveLength(1)
+    expect(matches[0].fillAmount).toBe(10n)
+    expect(matches[0].price).toBe(100n)   // executes at bid price, NOT 0n
+  })
+
   it('market order with no liquidity → status cancelled (IOC)', async () => {
     await book.submit(makeOrder({ id: 'buy-1', isBuy: true, price: 0n, orderType: 'market', nonce: 2n }))
     expect((await store.getOrder('buy-1'))?.status).toBe('cancelled')
