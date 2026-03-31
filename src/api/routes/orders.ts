@@ -141,6 +141,48 @@ export function ordersRoutes(
       return reply.send({ cancelled: targets.length })
     })
 
+    // PUT /orders/:nonce — amend an order (cancel + resubmit with new price/amount)
+    fastify.put<{
+      Params: { nonce: string }
+      Body: { maker: string; signature: Hex; newPrice?: string; newAmount?: string }
+    }>('/orders/:nonce', async (req, reply) => {
+      const { maker, signature, newPrice, newAmount } = req.body
+
+      if (!maker || !/^0x[0-9a-fA-F]{40}$/.test(maker)) {
+        return reply.status(400).send({ error: 'Invalid maker address' })
+      }
+      if (!newPrice && !newAmount) {
+        return reply.status(400).send({ error: 'Provide newPrice or newAmount' })
+      }
+
+      const nonce = BigInt(req.params.nonce)
+      const orders = await store.getOrdersByMaker(maker)
+      const target = orders.find(
+        o => o.nonce === nonce && (o.status === 'open' || o.status === 'partial')
+      )
+      if (!target) return reply.status(404).send({ error: 'Order not found' })
+
+      // 1. Cancel old order
+      await store.updateOrder(target.id, { status: 'cancelled' })
+
+      // 2. Create amended order
+      const amended: StoredOrder = {
+        ...target,
+        id:           uuid(),
+        price:        newPrice  ? BigInt(newPrice)  : target.price,
+        amount:       newAmount ? BigInt(newAmount) : target.amount,
+        signature,
+        submittedAt:  Date.now(),
+        filledAmount: 0n,
+        status:       'open',
+      }
+
+      const pairId = `${target.baseToken}/${target.quoteToken}`
+      await matching.submitOrder(amended, pairId)
+
+      return reply.send({ orderId: amended.id })
+    })
+
     // GET /orders/:address — open orders for a maker
     fastify.get<{ Params: { address: string } }>('/orders/:address', async (req, reply) => {
       const orders = await store.getOrdersByMaker(req.params.address)
