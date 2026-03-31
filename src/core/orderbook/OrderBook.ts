@@ -25,52 +25,57 @@ export class OrderBook {
     const results: MatchResult[] = []
 
     while (true) {
-      const incoming_ = await this.store.getOrder(incoming.id)
-      if (!incoming_ || (incoming_.status !== 'open' && incoming_.status !== 'partial')) break
+      const cur = await this.store.getOrder(incoming.id)
+      if (!cur || (cur.status !== 'open' && cur.status !== 'partial')) break
 
-      const remaining = incoming_.amount - incoming_.filledAmount
+      const remaining = cur.amount - cur.filledAmount
       if (remaining <= 0n) break
 
-      // Find counterparty
-      const counter = incoming_.isBuy
+      const counter = cur.isBuy
         ? await this.store.getBestAsk(this.pairId)
         : await this.store.getBestBid(this.pairId)
+      if (!counter || counter.id === cur.id) break
 
-      if (!counter || counter.id === incoming_.id) break
+      // Price check — skip when either side is a market order
+      const isMarket = cur.orderType === 'market' || counter.orderType === 'market'
+      if (!isMarket) {
+        const bid = cur.isBuy ? cur : counter
+        const ask = cur.isBuy ? counter : cur
+        if (bid.price < ask.price) break
+      }
 
-      // Price check: buy price must be >= sell price
-      const bid = incoming_.isBuy ? incoming_ : counter
-      const ask = incoming_.isBuy ? counter   : incoming_
+      // Execute at the limit (resting) order's price
+      const execPrice  = cur.isBuy ? counter.price : cur.price
+      const counterRem = counter.amount - counter.filledAmount
+      const fill       = remaining < counterRem ? remaining : counterRem
 
-      if (bid.price < ask.price) break
+      const newCurFill     = cur.filledAmount     + fill
+      const newCounterFill = counter.filledAmount + fill
 
-      // Fill at maker (ask) price — the ask is always the maker in price-time priority
-      const execPrice   = ask.price
-      const counterRem  = counter.amount - counter.filledAmount
-      const fillAmount  = remaining < counterRem ? remaining : counterRem
-
-      // Update both orders
-      const newIncomingFill = incoming_.filledAmount + fillAmount
-      const newCounterFill  = counter.filledAmount  + fillAmount
-
-      await this.store.updateOrder(incoming_.id, {
-        filledAmount: newIncomingFill,
-        status: newIncomingFill >= incoming_.amount ? 'filled' : 'partial',
+      await this.store.updateOrder(cur.id, {
+        filledAmount: newCurFill,
+        status: newCurFill >= cur.amount ? 'filled' : 'partial',
       })
       await this.store.updateOrder(counter.id, {
         filledAmount: newCounterFill,
         status: newCounterFill >= counter.amount ? 'filled' : 'partial',
       })
 
-      const makerOrder = incoming_.isBuy ? counter    : incoming_
-      const takerOrder = incoming_.isBuy ? incoming_  : counter
-
       results.push({
-        makerOrder, takerOrder,
-        fillAmount,
-        price: execPrice,
-        matchedAt: Date.now(),
+        makerOrder: cur.isBuy ? counter : cur,
+        takerOrder: cur.isBuy ? cur     : counter,
+        fillAmount: fill,
+        price:      execPrice,
+        matchedAt:  Date.now(),
       })
+    }
+
+    // IOC / market: cancel unfilled remainder immediately
+    if (incoming.orderType === 'market' || incoming.timeInForce === 'IOC') {
+      const final = await this.store.getOrder(incoming.id)
+      if (final && (final.status === 'open' || final.status === 'partial')) {
+        await this.store.updateOrder(incoming.id, { status: 'cancelled' })
+      }
     }
 
     return results

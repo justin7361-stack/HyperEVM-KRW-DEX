@@ -99,7 +99,8 @@ export class MemoryOrderBookStore implements IOrderBookStore {
       return (
         oPairId === pairId &&
         o.isBuy === isBuy &&
-        (o.status === 'open' || o.status === 'partial')
+        (o.status === 'open' || o.status === 'partial') &&
+        o.orderType !== 'market'   // market orders have no price → exclude from depth
       )
     })
   }
