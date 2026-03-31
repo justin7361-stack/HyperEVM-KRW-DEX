@@ -200,8 +200,15 @@ export function ordersRoutes(
         status:       'open',
       }
 
+      // Verify signature on amended order
+      const validAmended = await verifier.verify(amended, signature)
+      if (!validAmended) {
+        await store.updateOrder(target.id, { status: target.status })
+        return reply.status(400).send({ error: 'Invalid signature' })
+      }
+
       // I2 — Policy check
-      const makerIp = (req.headers['x-forwarded-for'] as string) ?? req.socket.remoteAddress
+      const makerIp = req.ip
       const policyResult = await policy.check({
         maker:      amended.maker,
         taker:      amended.taker,
