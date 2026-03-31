@@ -98,4 +98,20 @@ contract PairRegistryTest is Test {
         vm.expectRevert();
         impl.initialize(admin, krwStable);
     }
+
+    function test_RemoveToken_ClearsWhitelist() public {
+        vm.startPrank(admin);
+        registry.addToken(tokenA, false, false);
+        registry.removeToken(tokenA);
+        vm.stopPrank();
+
+        (bool wl,,) = registry.tokens(tokenA);
+        assertFalse(wl);
+    }
+
+    function test_RemoveToken_RevertNonAdmin() public {
+        vm.prank(operator);
+        vm.expectRevert();
+        registry.removeToken(tokenA);
+    }
 }

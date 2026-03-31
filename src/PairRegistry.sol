@@ -43,6 +43,7 @@ contract PairRegistry is Initializable, AccessControlUpgradeable, UUPSUpgradeabl
     function initialize(address admin, address _krwStablecoin) external initializer {
         __AccessControl_init();
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        require(_krwStablecoin != address(0), "Zero address");
         krwStablecoin = _krwStablecoin;
     }
 
@@ -97,6 +98,9 @@ contract PairRegistry is Initializable, AccessControlUpgradeable, UUPSUpgradeabl
         return keccak256(abi.encodePacked(baseToken, quoteToken));
     }
 
+    /// @notice Returns true if a trading pair is available and safe to trade.
+    /// @dev Only baseToken flags are checked. quoteToken is always krwStablecoin,
+    ///      which is admin-controlled and not expected to have feeOnTransfer/rebase.
     function isTradeAllowed(address baseToken, address quoteToken) external view returns (bool) {
         bytes32 pid    = getPairId(baseToken, quoteToken);
         Pair      memory p = pairs[pid];
