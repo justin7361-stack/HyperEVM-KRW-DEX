@@ -97,12 +97,13 @@ describe('FundingRateEngine', () => {
     expect(payments[0].rate).toBe(6.0)
   })
 
-  it('rate cap — negative cap test: rate within ±600% is not clamped', async () => {
-    // mark = 100, index = 1700 → raw rate = (100-1700)/1700 ≈ -94.1% → within cap, no clamping
-    const mark  = 100n  * 10n ** 18n
-    const index = 1700n * 10n ** 18n
-    // size = 1 ETH long (long pays when mark < index is negative, so long receives)
-    const pos = makePosition({ size: 1n * 10n ** 18n })
+  it('rate cap — large negative rate is NOT clamped (floor is -100% with positive prices); long receives', async () => {
+    // mark < index → negative rate → long receives (amount > 0), short pays
+    // With positive prices, rate = (mark - index)/index ≥ -100% always (mark ≥ 0)
+    // So the negative cap (-600%) is a safety net, not reachable in practice
+    const mark  = 100n * 10n ** 18n    // mark = 100
+    const index = 1000n * 10n ** 18n   // index = 1000 → rate = -90%
+    const pos   = makePosition({ size: 1n * 10n ** 18n })   // long 1 ETH
 
     const payments: FundingPayment[] = []
     engine.on('payment', (p: FundingPayment) => payments.push(p))
@@ -110,12 +111,10 @@ describe('FundingRateEngine', () => {
     await engine.applyFunding(PAIR, () => [pos], () => mark, () => index)
 
     expect(payments).toHaveLength(1)
-    // rate ≈ -0.941 (within -6 to 6 range), so no clamping
+    // -90% is within cap, not clamped
     expect(payments[0].rate).toBeGreaterThan(-6.0)
-    expect(payments[0].rate).toBeLessThan(0)
-    // rate should be close to (100 - 1700) / 1700 ≈ -0.9412
-    expect(payments[0].rate).toBeCloseTo(-16 / 17, 4)
-    // Long position with negative rate → long receives (amount > 0)
+    expect(payments[0].rate).toBeCloseTo(-0.9, 6)
+    // Long receives when rate < 0 (mark < index)
     expect(payments[0].amount).toBeGreaterThan(0n)
   })
 

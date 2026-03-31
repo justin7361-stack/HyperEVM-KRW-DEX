@@ -49,14 +49,17 @@ export class FundingRateEngine extends EventEmitter {
     const index = getIndexPrice()
     if (index === 0n) return
 
+    const RATE_SCALE = 10n ** 18n
+    // Cap rate at ±600%. Negative cap (-600%) is a safety net only —
+    // with positive prices, rate = (mark-index)/index ≥ -100% always.
+    const MAX_RATE_SCALED = 6n * RATE_SCALE
+
     const positions = getPositions()
 
     for (const pos of positions) {
       if (pos.pairId !== pairId || pos.size === 0n) continue
       const absSize = pos.size < 0n ? -pos.size : pos.size
       const notional = absSize * mark / 10n ** 18n
-      const RATE_SCALE = 10n ** 18n
-      const MAX_RATE_SCALED = 6n * RATE_SCALE   // 600% cap
       // Rate as fixed-point bigint (scaled by 1e18)
       const rateScaled = (mark - index) * RATE_SCALE / index
       const cappedRate = rateScaled > MAX_RATE_SCALED ? MAX_RATE_SCALED
@@ -66,6 +69,7 @@ export class FundingRateEngine extends EventEmitter {
       const rawPayment = notional * cappedRate / RATE_SCALE
       // Keep rate as number only for the FundingPayment.rate field (human-readable)
       const MAX_RATE_NUM = 6.0
+      // Number() is safe here — rateNum is display-only, not used in financial math
       const rateNum = Math.max(-MAX_RATE_NUM, Math.min(MAX_RATE_NUM, Number(mark - index) / Number(index)))
       // Long pays when rate > 0; short receives (and vice versa)
       const amount = pos.size > 0n ? -rawPayment : rawPayment
