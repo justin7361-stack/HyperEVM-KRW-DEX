@@ -13,6 +13,7 @@ import { settleBatch } from './core/settlement/settleBatch.js'
 import { ChainWatcher } from './core/watcher/ChainWatcher.js'
 import { TradeStore } from './api/routes/trades.js'
 import { buildServer } from './api/server.js'
+import { CandleStore } from './core/candles/CandleStore.js'
 
 const config = loadConfig()
 const { publicClient, pairRegistry } = createClients(config)
@@ -35,6 +36,8 @@ const blocklist = new BasicBlocklistPlugin(new Set())
 policy.register(blocklist)
 policy.register(new GeoBlockPlugin(new Set(config.blockedCountries)))
 
+const candleStore = new CandleStore()
+
 const worker = new SettlementWorker({
   batchSize:      config.batchSize,
   batchTimeoutMs: config.batchTimeoutMs,
@@ -52,6 +55,14 @@ matching.on('matched', (match) => {
     isBuyerMaker: match.makerOrder.isBuy,
     tradedAt:     match.matchedAt,
   })
+  candleStore.onTrade(pairId, {
+    id:           `${match.makerOrder.id}-${match.takerOrder.id}`,
+    pairId,
+    price:        match.price,
+    amount:       match.fillAmount,
+    isBuyerMaker: match.makerOrder.isBuy,
+    tradedAt:     match.matchedAt,
+  })
 })
 
 worker.on('settled', (_batch, txHash) => console.log('Settled:', txHash))
@@ -60,7 +71,7 @@ worker.on('error',   (_batch, err)    => console.error('Settlement error:', err)
 const watcher = new ChainWatcher(publicClient, config.orderSettlementAddress, store)
 watcher.start()
 
-const server = buildServer({ config, verifier, policy, matching, store, trades, pairRegistry, worker, blocklist })
+const server = buildServer({ config, verifier, policy, matching, store, trades, pairRegistry, worker, blocklist, candleStore })
 
 server.listen({ port: config.port, host: config.host }, (err) => {
   if (err) { console.error(err); process.exit(1) }

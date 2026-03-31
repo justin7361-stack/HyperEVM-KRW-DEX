@@ -20,6 +20,8 @@ import { tradesRoutes, TradeStore } from './routes/trades.js'
 import { streamRoutes } from './websocket/stream.js'
 import { adminRoutes } from '../admin/routes.js'
 import { TraderKeyStore, createTraderAuth, apiKeyManagementRoutes } from './auth/traderAuth.js'
+import { candlesRoutes } from './routes/candles.js'
+import type { CandleStore } from '../core/candles/CandleStore.js'
 
 export function buildServer(deps: {
   config:          Config
@@ -32,6 +34,7 @@ export function buildServer(deps: {
   worker?:         SettlementWorker
   blocklist?:      BasicBlocklistPlugin
   traderKeyStore?: TraderKeyStore
+  candleStore?:    CandleStore
 }) {
   const { config, verifier, policy, matching, store, trades, pairRegistry, worker, blocklist } = deps
   const fastify = Fastify({ logger: true })
@@ -45,6 +48,8 @@ export function buildServer(deps: {
   fastify.register(orderbookRoutes(matching))
   fastify.register(tradesRoutes(trades))
   fastify.register(streamRoutes(matching, trades))
+
+  if (deps.candleStore) fastify.register(candlesRoutes(deps.candleStore))
 
   // Admin dashboard static files + admin API routes (optional in tests)
   if (worker && blocklist) {
