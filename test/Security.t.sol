@@ -63,12 +63,14 @@ contract SecurityTest is Test {
             ))
         )));
 
-        // Cache role constant BEFORE vm.startPrank (staticcall would consume the prank)
-        bytes32 depositorRole = feeCollector.DEPOSITOR_ROLE();
+        // Cache role constants BEFORE vm.startPrank (staticcall would consume the prank)
+        bytes32 depositorRole    = feeCollector.DEPOSITOR_ROLE();
+        bytes32 compOperatorRole = compliance.OPERATOR_ROLE();
         vm.startPrank(admin);
         registry.addToken(address(baseToken), false, false);
         registry.addPair(address(baseToken), address(krwStable), 1e14, 1e15, 1e17, 1_000_000e18);
         feeCollector.grantRole(depositorRole, address(settlement));
+        compliance.grantRole(compOperatorRole, operator);
         vm.stopPrank();
 
         baseToken.mint(taker, 100e18);
@@ -104,16 +106,11 @@ contract SecurityTest is Test {
         krwStable.mint(maker, 10_000e18);
 
         vm.prank(operator);
-        vm.expectRevert(); // "Nonce used" or "Maker overfill"
+        vm.expectRevert("Maker overfill"); // Replay blocked: filledAmount already at capacity
         settlement.settle(mo, to_, 1e18, ms, ts);
     }
 
     function test_Security_BlockedAddress_CannotTrade() public {
-        // Cache role constant BEFORE vm.prank (staticcall would consume the prank)
-        bytes32 operatorRole = compliance.OPERATOR_ROLE();
-        vm.prank(admin);
-        compliance.grantRole(operatorRole, operator);
-
         vm.prank(operator);
         compliance.blockAddress(maker);
 
