@@ -86,8 +86,32 @@ export function streamRoutes(matching: MatchingEngine, tradeStore: TradeStore) {
 
       matching.on('matched', onMatched)
 
+      // --- Heartbeat ---
+      const PING_INTERVAL_MS = 30_000
+      const PONG_TIMEOUT_MS  = 10_000
+
+      let pongTimer: ReturnType<typeof setTimeout> | null = null
+
+      const pingInterval = setInterval(() => {
+        if (socket.readyState !== socket.OPEN) return
+        socket.send(JSON.stringify({ type: 'ping', ts: Date.now() }))
+        pongTimer = setTimeout(() => {
+          socket.terminate()  // force-close if no pong received within 10s
+        }, PONG_TIMEOUT_MS)
+      }, PING_INTERVAL_MS)
+
+      socket.on('message', (raw: Buffer) => {
+        let msg: { type?: string }
+        try { msg = JSON.parse(raw.toString()) } catch { return }
+        if (msg.type === 'pong') {
+          if (pongTimer) { clearTimeout(pongTimer); pongTimer = null }
+        }
+      })
+
       socket.on('close', () => {
         matching.off('matched', onMatched)
+        clearInterval(pingInterval)
+        if (pongTimer) { clearTimeout(pongTimer); pongTimer = null }
       })
     })
   }
