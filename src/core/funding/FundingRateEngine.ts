@@ -49,17 +49,22 @@ export class FundingRateEngine extends EventEmitter {
     const index = getIndexPrice()
     if (index === 0n) return
 
-    const rate = Number(mark - index) / Number(index)
     const positions = getPositions()
 
     for (const pos of positions) {
       if (pos.pairId !== pairId || pos.size === 0n) continue
       const absSize = pos.size < 0n ? -pos.size : pos.size
       const notional = absSize * mark / 10n ** 18n
-      const rawPayment = BigInt(Math.round(Number(notional) * rate))
+      const RATE_SCALE = 10n ** 18n
+      // Rate as fixed-point bigint (scaled by 1e18)
+      const rateScaled = (mark - index) * RATE_SCALE / index
+      // Payment = notional * rateScaled / RATE_SCALE
+      const rawPayment = notional * rateScaled / RATE_SCALE
+      // Keep rate as number only for the FundingPayment.rate field (human-readable)
+      const rateNum = Number(mark - index) / Number(index)
       // Long pays when rate > 0; short receives (and vice versa)
       const amount = pos.size > 0n ? -rawPayment : rawPayment
-      this.emit('payment', { maker: pos.maker, pairId, amount, rate, timestamp: Date.now() } satisfies FundingPayment)
+      this.emit('payment', { maker: pos.maker, pairId, amount, rate: rateNum, timestamp: Date.now() } satisfies FundingPayment)
     }
   }
 

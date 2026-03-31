@@ -17,7 +17,7 @@ export class LiquidationEngine extends EventEmitter {
   constructor(
     private readonly oracle:                 MarkPriceOracle,
     private readonly submitFn:               SubmitFn,
-    private readonly maintenanceMarginRatio = 0.025,  // 2.5%
+    private readonly maintenanceMarginBps = 250n,  // 2.5% = 250 bps
   ) {
     super()
   }
@@ -30,7 +30,7 @@ export class LiquidationEngine extends EventEmitter {
 
       const absSize  = pos.size < 0n ? -pos.size : pos.size
       const notional = absSize * markPrice / 10n ** 18n
-      const minMargin = BigInt(Math.floor(Number(notional) * this.maintenanceMarginRatio))
+      const minMargin = notional * this.maintenanceMarginBps / 10000n
 
       if (pos.margin < minMargin) {
         this.emit('liquidation', {
