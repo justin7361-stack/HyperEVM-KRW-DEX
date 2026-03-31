@@ -28,7 +28,7 @@ export function streamRoutes(matching: MatchingEngine, tradeStore: TradeStore) {
 
       // Send orderbook snapshot immediately on connect
       matching.getDepth(pairId, 20).then(depth => {
-        if (socket.readyState !== 1) return
+        if (socket.readyState !== socket.OPEN) return
         socket.send(JSON.stringify({
           type: 'orderbook.snapshot',
           data: {
@@ -44,7 +44,7 @@ export function streamRoutes(matching: MatchingEngine, tradeStore: TradeStore) {
       const onMatched = (match: MatchResult) => {
         const matchPairId = `${match.makerOrder.baseToken}/${match.makerOrder.quoteToken}`
         if (matchPairId !== pairId) return
-        if (socket.readyState !== 1 /* OPEN */) return
+        if (socket.readyState !== socket.OPEN) return
 
         socket.send(JSON.stringify({
           type: 'trades.recent',
@@ -72,7 +72,7 @@ export function streamRoutes(matching: MatchingEngine, tradeStore: TradeStore) {
 
         // Push updated depth after each match
         matching.getDepth(pairId, 20).then(depth => {
-          if (socket.readyState !== 1) return
+          if (socket.readyState !== socket.OPEN) return
           socket.send(JSON.stringify({
             type: 'orderbook.update',
             data: {
@@ -93,6 +93,7 @@ export function streamRoutes(matching: MatchingEngine, tradeStore: TradeStore) {
       let pongTimer: ReturnType<typeof setTimeout> | null = null
 
       const pingInterval = setInterval(() => {
+        if (pongTimer) { clearTimeout(pongTimer); pongTimer = null }
         if (socket.readyState !== socket.OPEN) return
         socket.send(JSON.stringify({ type: 'ping', ts: Date.now() }))
         pongTimer = setTimeout(() => {
