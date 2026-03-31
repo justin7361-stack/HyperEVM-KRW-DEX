@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events'
 import type { MarginPosition, StoredOrder } from '../../types/order.js'
 import type { MarkPriceOracle } from '../oracle/MarkPriceOracle.js'
+import type { InsuranceFund } from '../insurance/InsuranceFund.js'
 import { v4 as uuid } from 'uuid'
 import type { Hex } from 'viem'
 
@@ -20,6 +21,7 @@ export class LiquidationEngine extends EventEmitter {
     private readonly oracle:                 MarkPriceOracle,
     private readonly submitFn:               SubmitFn,
     private readonly maintenanceMarginBps = 250n,  // 2.5% = 250 bps
+    private readonly insuranceFund?:         InsuranceFund,
   ) {
     super()
   }
@@ -49,6 +51,12 @@ export class LiquidationEngine extends EventEmitter {
           reason: `margin ${pos.margin} < maintenance ${minMargin} (step ${newStep}/5)`,
         } satisfies LiquidationEvent)
         await this.submitLiquidationOrder(pos, markPrice)
+        if (this.insuranceFund) {
+          const estimatedLoss = minMargin - pos.margin
+          if (estimatedLoss > 0n) {
+            this.insuranceFund.cover(pos.pairId, estimatedLoss)
+          }
+        }
       }
     }
   }

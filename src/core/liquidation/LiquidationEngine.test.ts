@@ -147,6 +147,32 @@ describe('LiquidationEngine', () => {
     expect(submittedOrders[0].amount).toBe(4n)  // full fallback, not 0n
   })
 
+  it('connects to InsuranceFund — covers estimated loss on liquidation', async () => {
+    const oracle = makeOracle(1000n)
+    const submitFn = vi.fn().mockResolvedValue(undefined)
+
+    // Import InsuranceFund dynamically or inline a mock
+    // Use a simple mock object that matches the InsuranceFund interface
+    const coverCalls: Array<{ pairId: string; loss: bigint }> = []
+    const mockFund = {
+      cover(pairId: string, loss: bigint): boolean {
+        coverCalls.push({ pairId, loss })
+        return true
+      }
+    }
+
+    // Cast as any to satisfy the optional param type
+    const engine = new LiquidationEngine(oracle, submitFn, 250n, mockFund as any)
+
+    // margin=10, minMargin=25 → estimatedLoss = 25-10 = 15
+    const pos = makePosition({ margin: 10n })
+    await engine.checkPositions([pos])
+
+    expect(coverCalls).toHaveLength(1)
+    expect(coverCalls[0].pairId).toBe(PAIR)
+    expect(coverCalls[0].loss).toBe(15n)  // minMargin(25) - margin(10) = 15
+  })
+
   it('resetSteps — resets liquidation step counter', async () => {
     const oracle = makeOracle(1000n)
     const submitFn = vi.fn().mockResolvedValue(undefined)
