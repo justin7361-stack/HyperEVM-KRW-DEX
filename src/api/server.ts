@@ -14,6 +14,7 @@ import type { IOrderBookStore } from '../core/orderbook/IOrderBookStore.js'
 import type { SettlementWorker } from '../core/settlement/SettlementWorker.js'
 import type { BasicBlocklistPlugin } from '../compliance/plugins/BasicBlocklistPlugin.js'
 import { ordersRoutes } from './routes/orders.js'
+import { ordersBatchRoutes } from './routes/ordersBatch.js'
 import { orderbookRoutes } from './routes/orderbook.js'
 import { tradesRoutes, TradeStore } from './routes/trades.js'
 import { streamRoutes } from './websocket/stream.js'
@@ -38,6 +39,7 @@ export function buildServer(deps: {
   fastify.register(fastifyWebSocket)
 
   fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry))
+  fastify.register(ordersBatchRoutes(verifier, policy, matching, store, pairRegistry))
   fastify.register(orderbookRoutes(matching))
   fastify.register(tradesRoutes(trades))
   fastify.register(streamRoutes(matching, trades))
