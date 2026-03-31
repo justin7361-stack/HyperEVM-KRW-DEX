@@ -23,6 +23,10 @@ export class MatchingEngine extends EventEmitter {
   }
 
   async submitOrder(order: StoredOrder, pairId: string): Promise<void> {
+    if ((this as any)._paused) {
+      this.emit('rejected', order.id, 'Server paused')
+      return
+    }
     const book = this.getOrCreateBook(pairId)
     const matches = await book.submit(order)
     for (const match of matches) {
