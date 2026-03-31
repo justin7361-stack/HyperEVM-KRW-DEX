@@ -31,7 +31,8 @@ const store     = new MemoryOrderBookStore()
 const trades    = new TradeStore()
 const matching  = new MatchingEngine(store)
 
-policy.register(new BasicBlocklistPlugin(new Set()))
+const blocklist = new BasicBlocklistPlugin(new Set())
+policy.register(blocklist)
 policy.register(new GeoBlockPlugin(new Set(config.blockedCountries)))
 
 const worker = new SettlementWorker({
@@ -59,7 +60,7 @@ worker.on('error',   (_batch, err)    => console.error('Settlement error:', err)
 const watcher = new ChainWatcher(publicClient, config.orderSettlementAddress, store)
 watcher.start()
 
-const server = buildServer({ config, verifier, policy, matching, store, trades, pairRegistry })
+const server = buildServer({ config, verifier, policy, matching, store, trades, pairRegistry, worker, blocklist })
 
 server.listen({ port: config.port, host: config.host }, (err) => {
   if (err) { console.error(err); process.exit(1) }
