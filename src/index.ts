@@ -19,6 +19,10 @@ import { ConditionalOrderEngine } from './core/conditional/ConditionalOrderEngin
 import { PositionTracker } from './core/position/PositionTracker.js'
 import { ExpiryWorker } from './core/expiry/ExpiryWorker.js'
 import { TraderKeyStore } from './api/auth/traderAuth.js'
+import { FundingRateEngine } from './core/funding/FundingRateEngine.js'
+import { LiquidationEngine } from './core/liquidation/LiquidationEngine.js'
+import { MarkPriceOracle }   from './core/oracle/MarkPriceOracle.js'
+import { InsuranceFund }     from './core/insurance/InsuranceFund.js'
 
 const config = loadConfig()
 const { publicClient, pairRegistry } = createClients(config)
@@ -50,6 +54,25 @@ const conditionalEngine = new ConditionalOrderEngine(
 const expiryWorker = new ExpiryWorker(store)
 const traderKeyStore = new TraderKeyStore()
 
+// ── Perp engines ────────────────────────────────────────────────────────────
+const markOracle     = new MarkPriceOracle()
+const insuranceFund  = new InsuranceFund()
+const fundingEngine  = new FundingRateEngine()
+const liquidationEngine = new LiquidationEngine(
+  markOracle,
+  (order, pairId) => matching.submitOrder(order, pairId),
+  250n,           // maintenanceMarginBps = 2.5%
+  insuranceFund,
+)
+
+insuranceFund.on('adl_needed', (pairId: string, shortfall: bigint) => {
+  console.warn(`[ADL] Insurance fund exhausted for ${pairId}, shortfall: ${shortfall}`)
+})
+
+liquidationEngine.on('liquidation', (event) => {
+  console.log(`[Liquidation] ${event.position.maker} on ${event.position.pairId} — ${event.reason}`)
+})
+
 const worker = new SettlementWorker({
   batchSize:      config.batchSize,
   batchTimeoutMs: config.batchTimeoutMs,
@@ -74,6 +97,7 @@ matching.on('matched', (match) => {
 
 matching.on('price', (pairId: string, price: bigint) => {
   void conditionalEngine.onPrice(pairId, price)
+  markOracle.onTrade(pairId, { price, tradedAt: Date.now() } as any)
 })
 
 worker.on('settled', (_batch, txHash) => console.log('Settled:', txHash))
@@ -81,6 +105,12 @@ worker.on('error',   (_batch, err)    => console.error('Settlement error:', err)
 
 const watcher = new ChainWatcher(publicClient, config.orderSettlementAddress, store)
 watcher.start()
+
+// Check positions every 30 seconds
+const liquidationInterval = setInterval(() => {
+  const positions = positionTracker.getAll()
+  void liquidationEngine.checkPositions(positions)
+}, 30_000)
 
 expiryWorker.start()
 
@@ -96,6 +126,8 @@ server.listen({ port: config.port, host: config.host }, (err) => {
 
 process.on('SIGTERM', async () => {
   expiryWorker.stop()
+  fundingEngine.stopAll()
+  clearInterval(liquidationInterval)
   watcher.stop()
   worker.stop()
   await server.close()

@@ -26,4 +26,14 @@ export class PositionTracker {
     const p = this.getPosition(maker, pairId)
     return isBuy ? (p < 0n && -p >= amount) : (p > 0n && p >= amount)
   }
+
+  /** Returns all tracked positions as MarginPosition-compatible records for liquidation checks. */
+  getAll(): import('../../types/order.js').MarginPosition[] {
+    return [...this.pos.entries()].map(([key, size]) => {
+      const colonIdx = key.indexOf(':')
+      const maker    = key.slice(0, colonIdx) as import('viem').Hex
+      const pairId   = key.slice(colonIdx + 1)
+      return { maker, pairId, size, margin: 0n, mode: 'cross' as const }
+    })
+  }
 }
