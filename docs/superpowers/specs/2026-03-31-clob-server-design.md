@@ -1,8 +1,13 @@
 # HyperKRW CLOB Server — Design Spec
 
+**Version:** v1.0.0
 **Date:** 2026-03-31
 **Project:** krw-dex-server (별도 레포)
 **Status:** Approved — ready for implementation planning
+
+| 버전 | 날짜 | 변경 내용 |
+|------|------|-----------|
+| v1.0.0 | 2026-03-31 | 최초 작성 — TPS, 컴플라이언스, 프라이버시, UX 설계 확정 |
 
 ---
 
