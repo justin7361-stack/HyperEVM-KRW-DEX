@@ -11,6 +11,12 @@ export type TimeInForce  = 'GTC' | 'IOC' | 'FOK' | 'GTT' | 'POST_ONLY'
 export type ConditionType = 'stop_loss' | 'take_profit'
 export type MarginMode   = 'cross' | 'isolated'
 
+// STP = Self-Trade Prevention mode
+// EXPIRE_TAKER: cancel incoming taker (current default)
+// EXPIRE_MAKER: cancel the resting maker order, let taker continue
+// EXPIRE_BOTH:  cancel both sides
+export type StpMode = 'EXPIRE_TAKER' | 'EXPIRE_MAKER' | 'EXPIRE_BOTH'
+
 // ── Core order ──────────────────────────────────────────────────────────────
 export interface Order {
   maker:      Address
@@ -38,6 +44,9 @@ export interface Order {
 
   // ── Client-side dedup / tracking ────────────────────────────────────────
   clientOrderId?: string        // trader-supplied ID; unique per (maker, status=open)
+
+  // ── Self-Trade Prevention ───────────────────────────────────────────────
+  stp?: StpMode  // omitted = EXPIRE_TAKER
 
   // ── GTT expiry ──────────────────────────────────────────────────────────
   goodTillTime?:  bigint        // unix timestamp; used when timeInForce === 'GTT'

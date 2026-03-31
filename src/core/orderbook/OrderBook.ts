@@ -83,15 +83,27 @@ export class OrderBook {
         : await this.store.getBestBid(this.pairId)
       if (!counter || counter.id === cur.id) break
 
-      // STP (Self-Trade Prevention): cancel-taker strategy.
+      // STP (Self-Trade Prevention): mode-aware strategy.
       // If the best counter-order belongs to the same maker as the incoming order,
-      // cancel the incoming taker and exit the loop. The resting maker order is
-      // left untouched. Note: if the taker already partially filled against a
-      // different maker earlier in this loop, those fills stand — only the
-      // remaining quantity is cancelled here.
+      // apply the STP mode from the taker order. Note: if the taker already
+      // partially filled against a different maker earlier in this loop, those
+      // fills stand — only the remaining quantity is affected here.
       if (counter.maker.toLowerCase() === cur.maker.toLowerCase()) {
-        await this.store.updateOrder(cur.id, { status: 'cancelled' })
-        break
+        const stpMode = cur.stp ?? 'EXPIRE_TAKER'
+        if (stpMode === 'EXPIRE_MAKER') {
+          // Cancel the resting maker, let taker continue matching
+          await this.store.updateOrder(counter.id, { status: 'cancelled' })
+          continue  // do NOT break — taker keeps matching
+        } else if (stpMode === 'EXPIRE_BOTH') {
+          // Cancel both sides
+          await this.store.updateOrder(cur.id,     { status: 'cancelled' })
+          await this.store.updateOrder(counter.id, { status: 'cancelled' })
+          break
+        } else {
+          // EXPIRE_TAKER (default): cancel incoming taker
+          await this.store.updateOrder(cur.id, { status: 'cancelled' })
+          break
+        }
       }
 
       // Price check — skip when either side is a market order
