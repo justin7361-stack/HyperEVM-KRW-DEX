@@ -3,7 +3,7 @@ import { v4 as uuid } from 'uuid'
 import { MemoryOrderBookStore } from '../../src/core/orderbook/MemoryOrderBookStore.js'
 import type { StoredOrder } from '../../src/types/order.js'
 
-const PAIR = 'BASETOKEN/KRW'
+const PAIR = '0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
 
 function makeOrder(overrides: Partial<StoredOrder> = {}): StoredOrder {
   return {

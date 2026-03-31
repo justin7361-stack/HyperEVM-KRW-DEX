@@ -4,7 +4,7 @@ import { OrderBook } from '../../src/core/orderbook/OrderBook.js'
 import { MemoryOrderBookStore } from '../../src/core/orderbook/MemoryOrderBookStore.js'
 import type { StoredOrder } from '../../src/types/order.js'
 
-const PAIR = '0xAAAA/0xBBBB'
+const PAIR = '0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
 
 function makeOrder(isBuy: boolean, price: bigint, amount = 1n * 10n ** 18n): StoredOrder {
   return {

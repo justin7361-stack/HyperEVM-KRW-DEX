@@ -24,7 +24,7 @@ export class MemoryOrderBookStore implements IOrderBookStore {
   }
 
   async getBestBid(pairId: string): Promise<StoredOrder | null> {
-    const bids = this.getActiveBySide(true)
+    const bids = this.getActiveOrdersForPair(pairId, true)
     if (bids.length === 0) return null
     // Price DESC, then submittedAt ASC (FIFO at same price)
     bids.sort((a, b) => {
@@ -35,7 +35,7 @@ export class MemoryOrderBookStore implements IOrderBookStore {
   }
 
   async getBestAsk(pairId: string): Promise<StoredOrder | null> {
-    const asks = this.getActiveBySide(false)
+    const asks = this.getActiveOrdersForPair(pairId, false)
     if (asks.length === 0) return null
     // Price ASC, then submittedAt ASC (FIFO at same price)
     asks.sort((a, b) => {
@@ -50,8 +50,8 @@ export class MemoryOrderBookStore implements IOrderBookStore {
   }
 
   async getDepth(pairId: string, levels: number): Promise<OrderBookDepth> {
-    const bids = this.getActiveBySide(true)
-    const asks = this.getActiveBySide(false)
+    const bids = this.getActiveOrdersForPair(pairId, true)
+    const asks = this.getActiveOrdersForPair(pairId, false)
 
     const aggregateByPrice = (orders: StoredOrder[], descending: boolean): PriceLevel[] => {
       const map = new Map<bigint, PriceLevel>()
