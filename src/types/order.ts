@@ -122,10 +122,9 @@ export interface FundingRate {
 
 // ── Margin ───────────────────────────────────────────────────────────────────
 export interface MarginPosition {
-  maker:       Address
-  pairId:      string
-  size:        bigint    // baseToken, positive=long, negative=short
-  entryPrice:  bigint
-  margin:      bigint    // quoteToken collateral for this position
-  marginMode:  MarginMode
+  maker:   Address
+  pairId:  string
+  size:    bigint    // positive = long, negative = short (18-decimal base token units)
+  margin:  bigint    // quoteToken collateral allocated
+  mode:    'cross' | 'isolated'
 }
