@@ -143,4 +143,29 @@ describe('apiKeyManagementRoutes', () => {
     expect(res.statusCode).toBe(401)
     expect(JSON.parse(res.body)).toMatchObject({ error: 'Unauthorized' })
   })
+
+  it('DELETE /admin/api-keys/:key with correct Bearer token returns 200 and removes the key', async () => {
+    const { fastify, keyStore } = buildAdminApp()
+    // Pre-register a key so there is something to revoke
+    keyStore.register({ key: 'key-to-revoke', role: 'trade', maker: '0xEEE' })
+    const res = await fastify.inject({
+      method:  'DELETE',
+      url:     '/admin/api-keys/key-to-revoke',
+      headers: { authorization: `Bearer ${ADMIN_KEY}` },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body)).toMatchObject({ revoked: true })
+    expect(keyStore.get('key-to-revoke')).toBeUndefined()
+  })
+
+  it('DELETE /admin/api-keys/:key with wrong Bearer token returns 401', async () => {
+    const { fastify } = buildAdminApp()
+    const res = await fastify.inject({
+      method:  'DELETE',
+      url:     '/admin/api-keys/any-key',
+      headers: { authorization: 'Bearer wrong-token' },
+    })
+    expect(res.statusCode).toBe(401)
+    expect(JSON.parse(res.body)).toMatchObject({ error: 'Unauthorized' })
+  })
 })

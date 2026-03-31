@@ -9,6 +9,12 @@ export interface ApiKeyRecord {
   label?: string
 }
 
+declare module 'fastify' {
+  interface FastifyRequest {
+    apiKeyRecord?: ApiKeyRecord
+  }
+}
+
 // In-memory key store. In production, replace with DB or encrypted config.
 export class TraderKeyStore {
   private readonly keys = new Map<string, ApiKeyRecord>()
@@ -45,7 +51,7 @@ export function createTraderAuth(keyStore: TraderKeyStore, requireTrade = false)
     }
 
     // Attach to request for use in route handlers
-    ;(req as any).apiKeyRecord = record
+    req.apiKeyRecord = record
   }
 }
 
