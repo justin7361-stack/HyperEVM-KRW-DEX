@@ -9,8 +9,50 @@ export class OrderBook {
 
   // Submit an order, run matching, return all matches produced
   async submit(order: StoredOrder): Promise<MatchResult[]> {
+    // Post-Only: if the order would immediately cross the spread, cancel it
+    if (order.timeInForce === 'POST_ONLY') {
+      const wouldCross = await this.wouldCrossSpread(order)
+      if (wouldCross) {
+        const cancelled = { ...order, status: 'cancelled' as const }
+        await this.store.addOrder(cancelled)
+        return []
+      }
+    }
+
+    // FOK: check total available liquidity before matching
+    if (order.timeInForce === 'FOK') {
+      const available = await this.getTotalAvailable(order)
+      if (available < order.amount) {
+        const cancelled = { ...order, status: 'cancelled' as const }
+        await this.store.addOrder(cancelled)
+        return []
+      }
+    }
+
     await this.store.addOrder(order)
     return this.runMatching(order)
+  }
+
+  // Check if order would immediately match (cross the spread)
+  private async wouldCrossSpread(order: StoredOrder): Promise<boolean> {
+    const counter = order.isBuy
+      ? await this.store.getBestAsk(this.pairId)
+      : await this.store.getBestBid(this.pairId)
+    if (!counter) return false
+    const bid = order.isBuy ? order : counter
+    const ask = order.isBuy ? counter : order
+    return bid.price >= ask.price
+  }
+
+  // Sum total fillable quantity from opposite side at acceptable prices
+  private async getTotalAvailable(order: StoredOrder): Promise<bigint> {
+    const side = order.isBuy ? 'sell' : 'buy'
+    const orders = await this.store.getOpenOrders(this.pairId, side)
+    const priceOk = (o: StoredOrder) =>
+      order.isBuy ? order.price >= o.price : order.price <= o.price
+    return orders
+      .filter(priceOk)
+      .reduce((sum, o) => sum + (o.amount - o.filledAmount), 0n)
   }
 
   async getDepth(levels: number): Promise<OrderBookDepth> {
