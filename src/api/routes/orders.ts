@@ -21,6 +21,13 @@ interface CancelOrderBody {
   maker: string
 }
 
+interface AmendBody {
+  maker:      string
+  signature:  Hex
+  newPrice?:  string
+  newAmount?: string
+}
+
 export function ordersRoutes(
   verifier:     IOrderVerifier,
   policy:       PolicyEngine,
@@ -144,7 +151,7 @@ export function ordersRoutes(
     // PUT /orders/:nonce — amend an order (cancel + resubmit with new price/amount)
     fastify.put<{
       Params: { nonce: string }
-      Body: { maker: string; signature: Hex; newPrice?: string; newAmount?: string }
+      Body: AmendBody
     }>('/orders/:nonce', async (req, reply) => {
       const { maker, signature, newPrice, newAmount } = req.body
 
@@ -155,12 +162,28 @@ export function ordersRoutes(
         return reply.status(400).send({ error: 'Provide newPrice or newAmount' })
       }
 
-      const nonce = BigInt(req.params.nonce)
+      // C1 — Guard BigInt conversions
+      let nonce: bigint
+      let parsedNewPrice: bigint | undefined
+      let parsedNewAmount: bigint | undefined
+      try {
+        nonce = BigInt(req.params.nonce)
+        parsedNewPrice  = newPrice  ? BigInt(newPrice)  : undefined
+        parsedNewAmount = newAmount ? BigInt(newAmount) : undefined
+      } catch {
+        return reply.status(400).send({ error: 'Invalid numeric field' })
+      }
+
       const orders = await store.getOrdersByMaker(maker)
       const target = orders.find(
         o => o.nonce === nonce && (o.status === 'open' || o.status === 'partial')
       )
       if (!target) return reply.status(404).send({ error: 'Order not found' })
+
+      // I1 — Expiry check
+      if (target.expiry < BigInt(Math.floor(Date.now() / 1000))) {
+        return reply.status(400).send({ error: 'Order has expired' })
+      }
 
       // 1. Cancel old order
       await store.updateOrder(target.id, { status: 'cancelled' })
@@ -169,18 +192,42 @@ export function ordersRoutes(
       const amended: StoredOrder = {
         ...target,
         id:           uuid(),
-        price:        newPrice  ? BigInt(newPrice)  : target.price,
-        amount:       newAmount ? BigInt(newAmount) : target.amount,
+        price:        parsedNewPrice  ?? target.price,
+        amount:       parsedNewAmount ?? target.amount,
         signature,
         submittedAt:  Date.now(),
         filledAmount: 0n,
         status:       'open',
       }
 
-      const pairId = `${target.baseToken}/${target.quoteToken}`
-      await matching.submitOrder(amended, pairId)
+      // I2 — Policy check
+      const makerIp = (req.headers['x-forwarded-for'] as string) ?? req.socket.remoteAddress
+      const policyResult = await policy.check({
+        maker:      amended.maker,
+        taker:      amended.taker,
+        baseToken:  amended.baseToken,
+        quoteToken: amended.quoteToken,
+        amount:     amended.amount,
+        price:      amended.price,
+        makerIp,
+      })
+      if (!policyResult.allowed) {
+        // Restore old order status since we cancelled it
+        await store.updateOrder(target.id, { status: target.status })
+        return reply.status(403).send({ error: policyResult.reason ?? 'Compliance check failed' })
+      }
 
-      return reply.send({ orderId: amended.id })
+      // I3 — Submit with rollback on error
+      try {
+        const pairId = `${target.baseToken}/${target.quoteToken}`
+        await matching.submitOrder(amended, pairId)
+      } catch (err) {
+        await store.updateOrder(target.id, { status: target.status })
+        return reply.status(500).send({ error: 'Failed to submit amended order' })
+      }
+
+      // I4 — Return 201
+      return reply.status(201).send({ orderId: amended.id })
     })
 
     // GET /orders/:address — open orders for a maker
