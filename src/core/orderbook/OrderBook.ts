@@ -44,7 +44,12 @@ export class OrderBook {
     return bid.price >= ask.price
   }
 
-  // Sum total fillable quantity from opposite side at acceptable prices
+  // Sum total fillable quantity from opposite side at acceptable prices.
+  // NOTE: This check is a pre-flight estimate, not a lock. Under the current
+  // single-threaded in-memory store, the result is always accurate at match time.
+  // If the store is replaced with a concurrent/persistent implementation, a TOCTOU
+  // race could cause this estimate to be stale. The FOK post-match cancellation
+  // in runMatching acts as a safety net in that scenario.
   private async getTotalAvailable(order: StoredOrder): Promise<bigint> {
     const side = order.isBuy ? 'sell' : 'buy'
     const orders = await this.store.getOpenOrders(this.pairId, side)
@@ -112,8 +117,12 @@ export class OrderBook {
       })
     }
 
-    // IOC / market: cancel unfilled remainder immediately
-    if (incoming.orderType === 'market' || incoming.timeInForce === 'IOC') {
+    // IOC / market / FOK: cancel unfilled remainder immediately
+    if (
+      incoming.orderType === 'market' ||
+      incoming.timeInForce === 'IOC' ||
+      incoming.timeInForce === 'FOK'
+    ) {
       const final = await this.store.getOrder(incoming.id)
       if (final && (final.status === 'open' || final.status === 'partial')) {
         await this.store.updateOrder(incoming.id, { status: 'cancelled' })
