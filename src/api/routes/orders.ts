@@ -116,6 +116,31 @@ export function ordersRoutes(
       },
     )
 
+    // DELETE /orders — cancel ALL open orders for a maker (optional: filter by pair)
+    fastify.delete<{
+      Querystring: { maker: string; pair?: string }
+    }>('/orders', async (req, reply) => {
+      const { maker, pair } = req.query
+
+      if (!maker || !/^0x[0-9a-fA-F]{40}$/.test(maker)) {
+        return reply.status(400).send({ error: 'Invalid maker address' })
+      }
+
+      const allOrders = await store.getOrdersByMaker(maker)
+      const targets = allOrders.filter(o => {
+        if (o.status !== 'open' && o.status !== 'partial') return false
+        if (pair) {
+          const oPairId = `${o.baseToken}/${o.quoteToken}`
+          if (oPairId !== pair) return false
+        }
+        return true
+      })
+
+      await Promise.all(targets.map(o => store.updateOrder(o.id, { status: 'cancelled' })))
+
+      return reply.send({ cancelled: targets.length })
+    })
+
     // GET /orders/:address — open orders for a maker
     fastify.get<{ Params: { address: string } }>('/orders/:address', async (req, reply) => {
       const orders = await store.getOrdersByMaker(req.params.address)
