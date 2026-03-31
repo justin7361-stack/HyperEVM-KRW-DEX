@@ -2309,6 +2309,421 @@ git commit -m "chore: add dotenv, finalize project"
 
 ---
 
+## Task 14: Admin Auth Middleware + Config 업데이트
+
+**Files:**
+- Modify: `src/config/config.ts` — adminApiKey 필드 추가
+- Modify: `.env.example` — ADMIN_API_KEY 추가
+- Create: `src/admin/auth.ts` — Bearer 토큰 미들웨어
+
+- [ ] **Step 1: Config에 adminApiKey 추가**
+
+`src/config/config.ts`의 Config 인터페이스에 추가:
+```typescript
+adminApiKey: string
+```
+
+`loadConfig()` 함수에 추가:
+```typescript
+adminApiKey: requireEnv('ADMIN_API_KEY'),
+```
+
+- [ ] **Step 2: .env.example에 추가**
+
+```bash
+# Admin API
+ADMIN_API_KEY=change-me-in-production
+```
+
+- [ ] **Step 3: Admin auth 미들웨어 작성**
+
+`src/admin/auth.ts`:
+```typescript
+import type { FastifyRequest, FastifyReply } from 'fastify'
+
+export function createAdminAuth(adminApiKey: string) {
+  return async function adminAuth(req: FastifyRequest, reply: FastifyReply) {
+    const auth = req.headers['authorization']
+    if (!auth || auth !== `Bearer ${adminApiKey}`) {
+      return reply.status(401).send({ error: 'Unauthorized' })
+    }
+  }
+}
+```
+
+- [ ] **Step 4: tsc 체크 후 커밋**
+
+```bash
+npx tsc --noEmit
+git add src/config/config.ts .env.example src/admin/auth.ts
+git commit -m "feat: admin auth middleware — Bearer API key"
+```
+
+---
+
+## Task 15: Admin API Routes
+
+**Files:**
+- Create: `src/admin/routes.ts`
+
+- [ ] **Step 1: Admin routes 작성**
+
+`src/admin/routes.ts`:
+```typescript
+import type { FastifyInstance } from 'fastify'
+import type { Address } from 'viem'
+import type { Config } from '../config/config.js'
+import type { MatchingEngine } from '../core/matching/MatchingEngine.js'
+import type { SettlementWorker } from '../core/settlement/SettlementWorker.js'
+import type { IOrderBookStore } from '../core/orderbook/IOrderBookStore.js'
+import type { BasicBlocklistPlugin } from '../compliance/plugins/BasicBlocklistPlugin.js'
+import { createAdminAuth } from './auth.js'
+
+export interface AdminDeps {
+  config:     Config
+  matching:   MatchingEngine
+  worker:     SettlementWorker
+  store:      IOrderBookStore
+  blocklist:  BasicBlocklistPlugin
+}
+
+export function adminRoutes(deps: AdminDeps) {
+  return async function (fastify: FastifyInstance) {
+    const auth = createAdminAuth(deps.config.adminApiKey)
+
+    // Apply auth to all admin routes
+    fastify.addHook('preHandler', auth)
+
+    // GET /admin/stats — 서버 상태 조회
+    fastify.get('/admin/stats', async (_req, reply) => {
+      const stats = {
+        uptime:      process.uptime(),
+        memoryMB:    Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        queueSize:   (deps.worker as any).queue?.length ?? 0,
+        timestamp:   Date.now(),
+      }
+      return reply.send(stats)
+    })
+
+    // GET /admin/blocklist — 차단 주소 목록 조회
+    fastify.get('/admin/blocklist', async (_req, reply) => {
+      const blocked = (deps.blocklist as any).blocked as Set<Address>
+      return reply.send({ blocked: [...blocked] })
+    })
+
+    // POST /admin/blocklist — 주소 차단 추가
+    fastify.post<{ Body: { address: Address } }>('/admin/blocklist', async (req, reply) => {
+      const { address } = req.body
+      if (!address) return reply.status(400).send({ error: 'address required' })
+      const blocked = (deps.blocklist as any).blocked as Set<Address>
+      blocked.add(address.toLowerCase() as Address)
+      return reply.send({ added: address })
+    })
+
+    // DELETE /admin/blocklist/:address — 차단 해제
+    fastify.delete<{ Params: { address: string } }>('/admin/blocklist/:address', async (req, reply) => {
+      const addr = req.params.address.toLowerCase() as Address
+      const blocked = (deps.blocklist as any).blocked as Set<Address>
+      blocked.delete(addr)
+      return reply.send({ removed: addr })
+    })
+
+    // POST /admin/pause — 매칭 일시 중단
+    fastify.post('/admin/pause', async (_req, reply) => {
+      (deps.matching as any)._paused = true
+      return reply.send({ status: 'paused' })
+    })
+
+    // POST /admin/resume — 매칭 재개
+    fastify.post('/admin/resume', async (_req, reply) => {
+      (deps.matching as any)._paused = false
+      return reply.send({ status: 'resumed' })
+    })
+  }
+}
+```
+
+**Note:** MatchingEngine의 `submitOrder`에 pause 체크 추가 필요:
+```typescript
+// src/core/matching/MatchingEngine.ts 의 submitOrder 첫 줄에 추가:
+async submitOrder(order: StoredOrder, pairId: string): Promise<void> {
+  if ((this as any)._paused) {
+    this.emit('rejected', order.id, 'Server paused')
+    return
+  }
+  // ... 기존 코드
+}
+```
+
+- [ ] **Step 2: MatchingEngine에 pause 체크 추가**
+
+`src/core/matching/MatchingEngine.ts`의 `submitOrder` 메서드 첫 줄에:
+```typescript
+if ((this as any)._paused) {
+  this.emit('rejected', order.id, 'Server paused')
+  return
+}
+```
+
+- [ ] **Step 3: tsc 체크 후 커밋**
+
+```bash
+npx tsc --noEmit
+git add src/admin/routes.ts src/core/matching/MatchingEngine.ts
+git commit -m "feat: admin API routes — stats, blocklist, pause/resume"
+```
+
+---
+
+## Task 16: Admin Dashboard (HTML)
+
+**Files:**
+- Create: `src/admin/public/index.html`
+- Modify: `src/api/server.ts` — static 파일 서빙 + admin routes 등록
+
+- [ ] **Step 1: @fastify/static 설치**
+
+```bash
+npm install @fastify/static
+```
+
+- [ ] **Step 2: Admin Dashboard HTML 작성**
+
+`src/admin/public/index.html` — 다크 테마 대시보드:
+```html
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HyperKRW Admin</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: #0d1117; color: #e6edf3; min-height: 100vh; }
+    header { background: #161b22; border-bottom: 1px solid #30363d;
+             padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 18px; font-weight: 600; color: #58a6ff; }
+    .badge { background: #1f6feb; color: #fff; font-size: 11px;
+             padding: 2px 8px; border-radius: 12px; }
+    main { padding: 24px; max-width: 1200px; margin: 0 auto; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 20px; }
+    .card h2 { font-size: 13px; color: #8b949e; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat-val { font-size: 28px; font-weight: 700; color: #58a6ff; }
+    .stat-label { font-size: 12px; color: #8b949e; margin-top: 4px; }
+    .section { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+    .section h2 { font-size: 15px; font-weight: 600; margin-bottom: 16px; color: #e6edf3; }
+    .btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer;
+           font-size: 13px; font-weight: 500; transition: opacity 0.15s; }
+    .btn:hover { opacity: 0.8; }
+    .btn-primary { background: #238636; color: #fff; }
+    .btn-danger  { background: #da3633; color: #fff; }
+    .btn-warn    { background: #9e6a03; color: #fff; }
+    .btn-blue    { background: #1f6feb; color: #fff; }
+    .input { background: #0d1117; border: 1px solid #30363d; color: #e6edf3;
+             padding: 8px 12px; border-radius: 6px; font-size: 13px; width: 100%; }
+    .input:focus { outline: none; border-color: #58a6ff; }
+    .row { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
+    .tag { background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+           padding: 4px 8px; font-size: 12px; font-family: monospace;
+           display: flex; align-items: center; gap: 8px; }
+    .tag-remove { cursor: pointer; color: #f85149; font-size: 16px; line-height: 1; }
+    .tag-remove:hover { color: #ff7b72; }
+    #blocklist-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; min-height: 32px; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+    .dot-green { background: #3fb950; }
+    .dot-red   { background: #f85149; }
+    .dot-yellow{ background: #d29922; }
+    #status-msg { font-size: 12px; color: #8b949e; margin-top: 8px; height: 16px; }
+    .pause-btns { display: flex; gap: 8px; }
+    #api-key-input { background: #0d1117; border: 1px solid #30363d; color: #e6edf3;
+                     padding: 8px 12px; border-radius: 6px; font-size: 13px; width: 320px; }
+    .auth-bar { background: #161b22; border-bottom: 1px solid #30363d;
+                padding: 12px 24px; display: flex; align-items: center; gap: 12px; font-size: 13px; }
+    .auth-bar label { color: #8b949e; }
+    #server-status { display: flex; align-items: center; font-size: 13px; }
+  </style>
+</head>
+<body>
+
+<div class="auth-bar">
+  <label>API Key:</label>
+  <input type="password" id="api-key-input" placeholder="Enter ADMIN_API_KEY..." />
+  <button class="btn btn-blue" onclick="saveKey()">접속</button>
+  <span id="server-status" style="margin-left:auto">
+    <span class="status-dot dot-yellow" id="status-dot"></span>
+    <span id="status-text">연결 대기 중</span>
+  </span>
+</div>
+
+<header>
+  <h1>🛡 HyperKRW Admin</h1>
+  <span class="badge">OPERATOR</span>
+</header>
+
+<main>
+  <!-- Stats -->
+  <div class="grid" id="stats-grid">
+    <div class="card"><h2>업타임</h2><div class="stat-val" id="stat-uptime">—</div><div class="stat-label">초</div></div>
+    <div class="card"><h2>메모리</h2><div class="stat-val" id="stat-memory">—</div><div class="stat-label">MB (heap used)</div></div>
+    <div class="card"><h2>정산 대기</h2><div class="stat-val" id="stat-queue">—</div><div class="stat-label">배치 큐 사이즈</div></div>
+  </div>
+
+  <!-- Pause / Resume -->
+  <div class="section">
+    <h2>매칭 엔진 제어</h2>
+    <div class="pause-btns">
+      <button class="btn btn-warn" onclick="pauseEngine()">⏸ 매칭 일시정지</button>
+      <button class="btn btn-primary" onclick="resumeEngine()">▶ 매칭 재개</button>
+    </div>
+    <div id="status-msg"></div>
+  </div>
+
+  <!-- Blocklist -->
+  <div class="section">
+    <h2>차단 주소 관리</h2>
+    <div class="row">
+      <input class="input" id="blocklist-input" placeholder="0x..." />
+      <button class="btn btn-danger" onclick="addBlock()">차단 추가</button>
+    </div>
+    <div id="blocklist-tags"></div>
+  </div>
+</main>
+
+<script>
+  let API_KEY = localStorage.getItem('admin_api_key') || ''
+  if (API_KEY) document.getElementById('api-key-input').value = API_KEY
+
+  function saveKey() {
+    API_KEY = document.getElementById('api-key-input').value.trim()
+    localStorage.setItem('admin_api_key', API_KEY)
+    refreshAll()
+  }
+
+  async function apiFetch(path, opts = {}) {
+    const res = await fetch(path, {
+      ...opts,
+      headers: { 'Authorization': `Bearer ${API_KEY}`, 'Content-Type': 'application/json', ...(opts.headers || {}) }
+    })
+    if (!res.ok) throw new Error(`${res.status}`)
+    return res.json()
+  }
+
+  async function refreshStats() {
+    try {
+      const data = await apiFetch('/admin/stats')
+      document.getElementById('stat-uptime').textContent = Math.floor(data.uptime)
+      document.getElementById('stat-memory').textContent = data.memoryMB
+      document.getElementById('stat-queue').textContent = data.queueSize
+      document.getElementById('status-dot').className = 'status-dot dot-green'
+      document.getElementById('status-text').textContent = '연결됨'
+    } catch {
+      document.getElementById('status-dot').className = 'status-dot dot-red'
+      document.getElementById('status-text').textContent = '연결 실패'
+    }
+  }
+
+  async function refreshBlocklist() {
+    try {
+      const data = await apiFetch('/admin/blocklist')
+      const container = document.getElementById('blocklist-tags')
+      container.innerHTML = ''
+      if (data.blocked.length === 0) {
+        container.innerHTML = '<span style="color:#8b949e;font-size:12px">차단된 주소 없음</span>'
+        return
+      }
+      data.blocked.forEach(addr => {
+        const tag = document.createElement('div')
+        tag.className = 'tag'
+        tag.innerHTML = `<span>${addr}</span><span class="tag-remove" onclick="removeBlock('${addr}')">×</span>`
+        container.appendChild(tag)
+      })
+    } catch {}
+  }
+
+  async function addBlock() {
+    const addr = document.getElementById('blocklist-input').value.trim()
+    if (!addr) return
+    try {
+      await apiFetch('/admin/blocklist', { method: 'POST', body: JSON.stringify({ address: addr }) })
+      document.getElementById('blocklist-input').value = ''
+      await refreshBlocklist()
+    } catch (e) { alert('추가 실패: ' + e.message) }
+  }
+
+  async function removeBlock(addr) {
+    try {
+      await apiFetch('/admin/blocklist/' + encodeURIComponent(addr), { method: 'DELETE' })
+      await refreshBlocklist()
+    } catch {}
+  }
+
+  async function pauseEngine() {
+    try {
+      await apiFetch('/admin/pause', { method: 'POST' })
+      setMsg('⏸ 매칭 엔진 일시정지됨', '#d29922')
+    } catch (e) { setMsg('실패: ' + e.message, '#f85149') }
+  }
+
+  async function resumeEngine() {
+    try {
+      await apiFetch('/admin/resume', { method: 'POST' })
+      setMsg('▶ 매칭 엔진 재개됨', '#3fb950')
+    } catch (e) { setMsg('실패: ' + e.message, '#f85149') }
+  }
+
+  function setMsg(msg, color) {
+    const el = document.getElementById('status-msg')
+    el.textContent = msg
+    el.style.color = color
+    setTimeout(() => { el.textContent = '' }, 3000)
+  }
+
+  function refreshAll() { refreshStats(); refreshBlocklist() }
+
+  if (API_KEY) refreshAll()
+  setInterval(refreshStats, 5000)
+</script>
+</body>
+</html>
+```
+
+- [ ] **Step 3: server.ts에 admin 등록**
+
+`src/api/server.ts`에 추가:
+```typescript
+import fastifyStatic from '@fastify/static'
+import { fileURLToPath } from 'url'
+import { join, dirname } from 'path'
+import { adminRoutes } from '../admin/routes.js'
+
+// buildServer deps에 admin 관련 추가:
+// worker: SettlementWorker, blocklist: BasicBlocklistPlugin
+
+// fastify 등록 부분에 추가:
+const __dirname = dirname(fileURLToPath(import.meta.url))
+fastify.register(fastifyStatic, {
+  root: join(__dirname, '../../src/admin/public'),
+  prefix: '/admin/ui',
+})
+fastify.register(adminRoutes({ config, matching, worker, store, blocklist }))
+```
+
+- [ ] **Step 4: index.ts에 blocklist + worker 연결**
+
+`src/index.ts`에서 `buildServer` 호출 시 `worker`와 `blocklist` 추가 전달.
+
+- [ ] **Step 5: tsc 체크 후 커밋**
+
+```bash
+npx tsc --noEmit
+git add src/admin/public/index.html src/api/server.ts src/index.ts
+git commit -m "feat: admin dashboard — dark theme HTML with stats, blocklist, pause/resume"
+```
+
+---
+
 ## 버전 관리 정책
 
 | 태그 | 의미 |
@@ -2316,6 +2731,7 @@ git commit -m "chore: add dotenv, finalize project"
 | `v0.1.0` | Task 1-6 완료 (타입, 검증, 컴플라이언스, 오더북) |
 | `v0.2.0` | Task 7-9 완료 (매칭, 정산, 체인워처) |
 | `v0.3.0` | Task 10-13 완료 (API, WebSocket, 통합테스트) |
+| `v0.4.0` | Task 14-16 완료 (어드민 대시보드) |
 | `v1.0.0` | 테스트넷 검증 완료 후 릴리스 |
 
 각 마일스톤 완료 시:
