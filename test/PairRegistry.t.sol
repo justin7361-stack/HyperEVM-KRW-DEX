@@ -23,8 +23,9 @@ contract PairRegistryTest is Test {
         bytes memory init = abi.encodeCall(PairRegistry.initialize, (admin, krwStable));
         registry = PairRegistry(address(new ERC1967Proxy(address(impl), init)));
 
+        bytes32 operatorRole = registry.OPERATOR_ROLE();
         vm.prank(admin);
-        registry.grantRole(registry.OPERATOR_ROLE(), operator);
+        registry.grantRole(operatorRole, operator);
     }
 
     function test_AddToken_Whitelists() public {

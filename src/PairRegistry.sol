@@ -43,10 +43,6 @@ contract PairRegistry is Initializable, AccessControlUpgradeable, UUPSUpgradeabl
     function initialize(address admin, address _krwStablecoin) external initializer {
         __AccessControl_init();
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        // Also grant admin role to deployer so they can manage roles before renouncing
-        if (msg.sender != admin) {
-            _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        }
         krwStablecoin = _krwStablecoin;
     }
 
