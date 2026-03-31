@@ -45,24 +45,18 @@ const worker = new SettlementWorker({
 })
 
 matching.on('matched', (match) => {
-  worker.enqueue(match)
   const pairId = `${match.makerOrder.baseToken}/${match.makerOrder.quoteToken}`
-  trades.add(pairId, {
+  const tradeRecord = {
     id:           `${match.makerOrder.id}-${match.takerOrder.id}`,
     pairId,
     price:        match.price,
     amount:       match.fillAmount,
     isBuyerMaker: match.makerOrder.isBuy,
     tradedAt:     match.matchedAt,
-  })
-  candleStore.onTrade(pairId, {
-    id:           `${match.makerOrder.id}-${match.takerOrder.id}`,
-    pairId,
-    price:        match.price,
-    amount:       match.fillAmount,
-    isBuyerMaker: match.makerOrder.isBuy,
-    tradedAt:     match.matchedAt,
-  })
+  }
+  worker.enqueue(match)
+  trades.add(pairId, tradeRecord)
+  candleStore.onTrade(pairId, tradeRecord)
 })
 
 worker.on('settled', (_batch, txHash) => console.log('Settled:', txHash))

@@ -67,6 +67,43 @@ describe('GET /candles/:pair', () => {
     expect(c.volume).toBe('500000000000000000')
   })
 
+  it('excludes candles outside the explicit start/end window', async () => {
+    const pairId = 'ETH/KRW'
+    const insideTradeAt  = TRADE_AT                  // inside window
+    const outsideTradeAt = TRADE_AT - RES_1M_MS * 2  // two buckets before start — outside window
+
+    const insideTrade: TradeRecord = {
+      id: 'trade-inside',
+      pairId,
+      price: 1_000_000_000_000_000_000n,
+      amount: 1_000_000_000_000_000_000n,
+      isBuyerMaker: true,
+      tradedAt: insideTradeAt,
+    }
+    const outsideTrade: TradeRecord = {
+      id: 'trade-outside',
+      pairId,
+      price: 2_000_000_000_000_000_000n,
+      amount: 1_000_000_000_000_000_000n,
+      isBuyerMaker: false,
+      tradedAt: outsideTradeAt,
+    }
+    store.onTrade(pairId, insideTrade)
+    store.onTrade(pairId, outsideTrade)
+
+    const app = buildApp(store)
+    const start = OPEN_TIME
+    const end   = OPEN_TIME + RES_1M_MS
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/candles/${encodeURIComponent(pairId)}?resolution=1m&start=${start}&end=${end}`,
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    expect(body.candles).toHaveLength(1)
+  })
+
   it('defaults: no start/end params uses last 24h window and returns candles within', async () => {
     const pairId = 'ETH/KRW'
     const now = Date.now()
