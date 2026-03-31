@@ -87,6 +87,12 @@ export function ordersRoutes(
       '/orders/:nonce',
       async (req, reply) => {
         const { maker } = req.body
+
+        // Validate maker is a valid Ethereum address format
+        if (!maker || !/^0x[0-9a-fA-F]{40}$/.test(maker)) {
+          return reply.status(400).send({ error: 'Invalid maker address' })
+        }
+
         const nonce = BigInt(req.params.nonce)
 
         const orders = await store.getOrdersByMaker(maker)
@@ -103,7 +109,18 @@ export function ordersRoutes(
     // GET /orders/:address — open orders for a maker
     fastify.get<{ Params: { address: string } }>('/orders/:address', async (req, reply) => {
       const orders = await store.getOrdersByMaker(req.params.address)
-      return reply.send({ orders: orders.filter(o => o.status === 'open') })
+      return reply.send({
+        orders: orders
+          .filter(o => o.status === 'open')
+          .map(o => ({
+            ...o,
+            price:        o.price.toString(),
+            amount:       o.amount.toString(),
+            nonce:        o.nonce.toString(),
+            expiry:       o.expiry.toString(),
+            filledAmount: o.filledAmount.toString(),
+          })),
+      })
     })
   }
 }
