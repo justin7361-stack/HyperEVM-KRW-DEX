@@ -93,6 +93,18 @@ describe('ExpiryWorker.sweep()', () => {
     expect(store.updateOrder).not.toHaveBeenCalled()
   })
 
+  it('expires a partial order whose hard expiry has passed', async () => {
+    const pastExpiry = BigInt(Math.floor(Date.now() / 1000) - 1)
+    const order = makeOrder({ id: 'partial-expired', expiry: pastExpiry, status: 'partial' })
+    const store = makeStore([order])
+    const worker = new ExpiryWorker(store)
+
+    const count = await worker.sweep()
+
+    expect(count).toBe(1)
+    expect(store.updateOrder).toHaveBeenCalledWith('partial-expired', { status: 'expired' })
+  })
+
   it('does NOT expire a filled order even if expiry has passed', async () => {
     const pastExpiry = BigInt(Math.floor(Date.now() / 1000) - 1)
     const order = makeOrder({ id: 'filled', expiry: pastExpiry, status: 'filled' })
