@@ -83,7 +83,12 @@ export class OrderBook {
         : await this.store.getBestBid(this.pairId)
       if (!counter || counter.id === cur.id) break
 
-      // STP: cancel taker (incoming) if same maker as resting order
+      // STP (Self-Trade Prevention): cancel-taker strategy.
+      // If the best counter-order belongs to the same maker as the incoming order,
+      // cancel the incoming taker and exit the loop. The resting maker order is
+      // left untouched. Note: if the taker already partially filled against a
+      // different maker earlier in this loop, those fills stand — only the
+      // remaining quantity is cancelled here.
       if (counter.maker.toLowerCase() === cur.maker.toLowerCase()) {
         await this.store.updateOrder(cur.id, { status: 'cancelled' })
         break
