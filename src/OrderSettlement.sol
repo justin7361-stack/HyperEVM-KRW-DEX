@@ -48,6 +48,15 @@ contract OrderSettlement is
         uint256 expiry;      // unix timestamp
     }
 
+    /// @notice A single funding payment record — positive amount = maker receives, negative = maker pays
+    struct FundingPayment {
+        address maker;
+        address quoteToken; // token transferred (KRW stablecoin)
+        int256  amount;     // scaled by 1e18; positive = receives, negative = pays
+        string  pairId;
+        uint256 timestamp;
+    }
+
     /// @dev nonceBitmap[user][wordIndex] = bitmap of used nonces
     mapping(address => mapping(uint256 => uint256)) public nonceBitmap;
     /// @dev filledAmount[orderHash] = total base amount filled
@@ -69,6 +78,7 @@ contract OrderSettlement is
     event OrderCancelled(address indexed user, uint256 nonce);
     event ComplianceUpdated(address indexed newModule);
     event TakerFeeUpdated(uint256 newFeeBps);
+    event FundingSettled(address indexed maker, address indexed quoteToken, int256 amount, string pairId);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -152,6 +162,23 @@ contract OrderSettlement is
         }
     }
 
+    /// @notice Settle a batch of funding payments. Operator submits payments computed
+    ///         off-chain by the FundingRateEngine. Positive amount = maker receives
+    ///         (funded by protocol reserve); negative amount = maker pays into reserve.
+    /// @dev    Payments are processed best-effort: individual failures are skipped.
+    ///         The operator must hold sufficient quoteToken approval for net outflows.
+    /// @param payments  Array of funding payment records
+    /// @param reserve   Address holding protocol funds for outgoing payments
+    function settleFunding(
+        FundingPayment[] calldata payments,
+        address reserve
+    ) external onlyRole(OPERATOR_ROLE) nonReentrant whenNotPaused {
+        require(reserve != address(0), "Zero reserve");
+        for (uint256 i = 0; i < payments.length; i++) {
+            _trySettleFunding(payments[i], reserve);
+        }
+    }
+
     // ─────────────────────────────────────────────
     //  View
     // ─────────────────────────────────────────────
@@ -197,6 +224,35 @@ contract OrderSettlement is
     // ─────────────────────────────────────────────
     //  Internal
     // ─────────────────────────────────────────────
+
+    /// @dev Best-effort single funding payment. Silently skips on failure.
+    function _trySettleFunding(FundingPayment calldata payment, address reserve) internal {
+        if (payment.amount == 0) return;
+        if (payment.maker == address(0)) return;
+        if (payment.quoteToken == address(0)) return;
+
+        try this._externalSettleFunding(payment, reserve) {} catch {}
+    }
+
+    /// @dev External wrapper for try/catch — only callable from address(this).
+    function _externalSettleFunding(
+        FundingPayment calldata payment,
+        address reserve
+    ) external {
+        require(msg.sender == address(this), "Internal only");
+
+        if (payment.amount > 0) {
+            // Maker receives — transfer from reserve to maker
+            uint256 absAmount = uint256(payment.amount);
+            IERC20(payment.quoteToken).safeTransferFrom(reserve, payment.maker, absAmount);
+        } else {
+            // Maker pays — transfer from maker to reserve
+            uint256 absAmount = uint256(-payment.amount);
+            IERC20(payment.quoteToken).safeTransferFrom(payment.maker, reserve, absAmount);
+        }
+
+        emit FundingSettled(payment.maker, payment.quoteToken, payment.amount, payment.pairId);
+    }
 
     /// @dev Attempts to settle a single order pair; silently skips on failure (used in batch).
     function _trySettle(
