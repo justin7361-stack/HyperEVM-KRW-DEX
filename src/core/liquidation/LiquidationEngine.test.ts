@@ -80,6 +80,9 @@ describe('LiquidationEngine', () => {
     expect(submittedOrders[1].isBuy).toBe(true)    // close short → buy
     expect(submittedOrders[0].orderType).toBe('market')
     expect(submittedOrders[1].orderType).toBe('market')
+    // amount = 20% of position size
+    expect(submittedOrders[0].amount).toBe(1n * 10n ** 18n * 20n / 100n)
+    expect(submittedOrders[1].amount).toBe(1n * 10n ** 18n * 20n / 100n)
   })
 
   it('skips positions with size=0n or markPrice=0n', async () => {
@@ -97,5 +100,55 @@ describe('LiquidationEngine', () => {
 
     expect(liquidations).toHaveLength(0)
     expect(submitFn).not.toHaveBeenCalled()
+  })
+
+  it('partial liquidation — 20% per step, max 5 steps', async () => {
+    const oracle = makeOracle(1000n)
+    const submitFn = vi.fn().mockResolvedValue(undefined)
+    const engine = new LiquidationEngine(oracle, submitFn)
+
+    const liquidations: LiquidationEvent[] = []
+    engine.on('liquidation', (e: LiquidationEvent) => liquidations.push(e))
+
+    const pos = makePosition({ size: 1n * 10n ** 18n, margin: 1n })
+
+    // Call 7 times — max steps is 5
+    for (let i = 0; i < 7; i++) {
+      await engine.checkPositions([pos])
+    }
+
+    expect(submitFn).toHaveBeenCalledTimes(5)
+    expect(liquidations).toHaveLength(5)
+
+    // Each order amount = 20% of 1 ETH
+    const calls = submitFn.mock.calls
+    for (const call of calls) {
+      const order = call[0] as StoredOrder
+      expect(order.amount).toBe(1n * 10n ** 18n * 20n / 100n)
+    }
+  })
+
+  it('resetSteps — resets liquidation step counter', async () => {
+    const oracle = makeOracle(1000n)
+    const submitFn = vi.fn().mockResolvedValue(undefined)
+    const engine = new LiquidationEngine(oracle, submitFn)
+
+    const pos = makePosition({ size: 1n * 10n ** 18n, margin: 1n })
+
+    // Do 2 partial liquidations
+    await engine.checkPositions([pos])
+    await engine.checkPositions([pos])
+
+    expect(submitFn).toHaveBeenCalledTimes(2)
+
+    // Reset step counter
+    engine.resetSteps(pos.maker, pos.pairId)
+
+    // Do 5 more — should all go through now
+    for (let i = 0; i < 5; i++) {
+      await engine.checkPositions([pos])
+    }
+
+    expect(submitFn).toHaveBeenCalledTimes(7)
   })
 })
