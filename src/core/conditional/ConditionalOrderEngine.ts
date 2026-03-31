@@ -20,13 +20,19 @@ export class ConditionalOrderEngine {
       if (entry.pairId !== pairId) continue
       if (!this.isTriggered(entry.order, price)) continue
       this.pending.delete(id)
-      await this.submitFn(entry.order, pairId)
+      try {
+        await this.submitFn(entry.order, pairId)
+      } catch (err) {
+        // Re-insert so the order is not permanently lost on transient errors
+        this.pending.set(id, entry)
+        console.error(`ConditionalOrderEngine: submitFn failed for order ${id}:`, err)
+      }
     }
   }
 
   private isTriggered(order: StoredOrder, price: bigint): boolean {
     const { conditionType, triggerPrice, isBuy } = order
-    if (!triggerPrice || !conditionType) return false
+    if (triggerPrice == null || !conditionType) return false
     if (conditionType === 'stop_loss')   return isBuy ? price >= triggerPrice : price <= triggerPrice
     if (conditionType === 'take_profit') return isBuy ? price <= triggerPrice : price >= triggerPrice
     return false

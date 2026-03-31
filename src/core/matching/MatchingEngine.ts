@@ -6,6 +6,7 @@ import { OrderBook } from '../orderbook/OrderBook.js'
 // Events emitted:
 //   'matched'  (result: MatchResult)    — one per fill
 //   'rejected' (orderId, reason)        — pair not active / pre-check fail
+//   'price'    (pairId, price: bigint)  — last execution price after each fill
 export class MatchingEngine extends EventEmitter {
   private readonly orderbooks = new Map<string, OrderBook>()
 
@@ -31,6 +32,7 @@ export class MatchingEngine extends EventEmitter {
     const matches = await book.submit(order)
     for (const match of matches) {
       this.emit('matched', match)
+      this.emit('price', pairId, match.price)
     }
   }
 
