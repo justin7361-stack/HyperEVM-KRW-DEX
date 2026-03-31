@@ -19,6 +19,8 @@ export async function settleBatch(
   const fillAmounts  = batch.map(m => m.fillAmount)
 
   const hash = await walletClient.writeContract({
+    chain: undefined,
+    account: walletClient.account!,
     address: contractAddress,
     abi: ORDER_SETTLEMENT_ABI,
     functionName: 'settleBatch',
