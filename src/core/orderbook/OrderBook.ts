@@ -83,6 +83,10 @@ export class OrderBook {
         : await this.store.getBestBid(this.pairId)
       if (!counter || counter.id === cur.id) break
 
+      // Defensive: skip any counter that is already cancelled/filled
+      // (required invariant for EXPIRE_MAKER continue path — ensures no infinite loop)
+      if (counter.status === 'cancelled' || counter.status === 'filled') break
+
       // STP (Self-Trade Prevention): mode-aware strategy.
       // If the best counter-order belongs to the same maker as the incoming order,
       // apply the STP mode from the taker order. Note: if the taker already
