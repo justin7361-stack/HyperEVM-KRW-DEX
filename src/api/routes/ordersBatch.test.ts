@@ -4,7 +4,6 @@ import { ordersBatchRoutes } from './ordersBatch.js'
 import type { IOrderVerifier } from '../../verification/IOrderVerifier.js'
 import type { PolicyEngine } from '../../compliance/PolicyEngine.js'
 import type { MatchingEngine } from '../../core/matching/MatchingEngine.js'
-import type { IOrderBookStore } from '../../core/orderbook/IOrderBookStore.js'
 import type { Clients } from '../../chain/contracts.js'
 
 // ── Mock dependencies ──────────────────────────────────────────────────────
@@ -21,8 +20,6 @@ const matching = {
   submitOrder: vi.fn().mockResolvedValue(undefined),
 } as unknown as MatchingEngine
 
-const store = {} as unknown as IOrderBookStore
-
 const pairRegistry = {
   read: {
     isTradeAllowed: vi.fn().mockResolvedValue(true),
@@ -33,7 +30,7 @@ const pairRegistry = {
 
 function buildApp() {
   const fastify = Fastify({ logger: false })
-  fastify.register(ordersBatchRoutes(verifier, policy, matching, store, pairRegistry))
+  fastify.register(ordersBatchRoutes(verifier, policy, matching, pairRegistry))
   return fastify
 }
 
@@ -131,5 +128,46 @@ describe('POST /orders/batch', () => {
     expect(body.results[0].index).toBe(0)
     expect(body.results[0].error).toBe('Order expired')
     expect(body.results[0].orderId).toBeUndefined()
+  })
+
+  it('returns 207 with error when signature is invalid', async () => {
+    vi.mocked(verifier.verify).mockResolvedValueOnce(false)
+    const app = buildApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/orders/batch',
+      payload: { orders: [validOrderItem] },
+    })
+    expect(res.statusCode).toBe(207)
+    const body = res.json()
+    expect(body.results).toHaveLength(1)
+    expect(body.results[0].index).toBe(0)
+    expect(body.results[0].error).toBe('Invalid signature')
+    expect(body.results[0].orderId).toBeUndefined()
+  })
+
+  it('returns 207 with mixed results for batch with one success and one expired', async () => {
+    const app = buildApp()
+    const expiredItem = {
+      ...validOrderItem,
+      order: {
+        ...validOrderItem.order,
+        expiry: String(Math.floor(Date.now() / 1000) - 100),
+      },
+    }
+    const res = await app.inject({
+      method: 'POST',
+      url: '/orders/batch',
+      payload: { orders: [validOrderItem, expiredItem] },
+    })
+    expect(res.statusCode).toBe(207)
+    const body = res.json()
+    expect(body.results).toHaveLength(2)
+    expect(body.results[0].index).toBe(0)
+    expect(typeof body.results[0].orderId).toBe('string')
+    expect(body.results[0].error).toBeUndefined()
+    expect(body.results[1].index).toBe(1)
+    expect(body.results[1].error).toBe('Order expired')
+    expect(body.results[1].orderId).toBeUndefined()
   })
 })

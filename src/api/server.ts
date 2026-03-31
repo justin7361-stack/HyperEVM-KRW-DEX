@@ -39,7 +39,7 @@ export function buildServer(deps: {
   fastify.register(fastifyWebSocket)
 
   fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry))
-  fastify.register(ordersBatchRoutes(verifier, policy, matching, store, pairRegistry))
+  fastify.register(ordersBatchRoutes(verifier, policy, matching, pairRegistry))
   fastify.register(orderbookRoutes(matching))
   fastify.register(tradesRoutes(trades))
   fastify.register(streamRoutes(matching, trades))
