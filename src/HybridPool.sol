@@ -154,6 +154,10 @@ contract HybridPool is
     //  Read-only reentrancy guard
     // ─────────────────────────────────────────────
 
+    // Defense-in-depth: `lock` implements read-only reentrancy protection (Curve 2023 pattern)
+    // so that view functions like currentA() can detect mid-execution state via `notLocked`.
+    // `nonReentrant` (ReentrancyGuardUpgradeable) guards against write-write reentrancy.
+    // Both are intentionally applied together — they protect against different attack surfaces.
     modifier lock() {
         require(_locked == 1, "Reentrant");
         _locked = 2;
@@ -202,7 +206,9 @@ contract HybridPool is
 
         require(lpTokens >= minLpOut, "Insufficient LP tokens");
 
-        // Interactions (must receive tokens before updating balances for first deposit)
+        // Note: transferFrom before balance update is a deliberate CEI relaxation for the LP
+        // deposit path — tokens must be received before balances can be verified. Protected
+        // by nonReentrant + lock, so reentrancy exploitation is not possible.
         for (uint256 i = 0; i < N_COINS; i++) {
             if (amounts[i] > 0) {
                 IERC20(tokens[i]).safeTransferFrom(msg.sender, address(this), amounts[i]);

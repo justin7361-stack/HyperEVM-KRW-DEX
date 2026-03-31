@@ -119,6 +119,27 @@ contract HybridPoolTest is Test {
         assertGt(out, 99e16);
     }
 
+    function test_Swap_USDCtoKRW_CurveMode() public {
+        uint256[2] memory amounts;
+        amounts[0] = INITIAL_KRW;
+        amounts[1] = INITIAL_USDC;
+        vm.prank(lp);
+        pool.addLiquidity(amounts, 0);
+
+        vm.roll(block.number + 1);
+
+        uint256 swapIn = 1e18; // 1 USDC → ~1350 KRW
+        uint256 krwBefore = krwStable.balanceOf(swapper);
+
+        vm.prank(swapper);
+        uint256 out = pool.swap(address(usdc), swapIn, 0);
+
+        assertGt(out, 0);
+        assertEq(krwStable.balanceOf(swapper), krwBefore + out);
+        // ~1350 KRW out (within 1% of oracle price)
+        assertGt(out, 1336e18); // 1350 * 0.99
+    }
+
     function test_Swap_RevertSameBlock_AfterLiquidity() public {
         uint256[2] memory amounts;
         amounts[0] = INITIAL_KRW;
