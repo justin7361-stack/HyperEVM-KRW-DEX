@@ -8,7 +8,7 @@ export class MarkPriceOracle {
 
   constructor(private readonly windowMs = 5 * 60_000) {}
 
-  onTrade(pairId: string, trade: TradeRecord): void {
+  onTrade(pairId: string, trade: Pick<TradeRecord, 'price' | 'tradedAt'>): void {
     const list   = this.trades.get(pairId) ?? []
     list.push({ price: trade.price, ts: trade.tradedAt })
     const cutoff = trade.tradedAt - this.windowMs

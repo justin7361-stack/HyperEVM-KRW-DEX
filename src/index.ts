@@ -97,7 +97,7 @@ matching.on('matched', (match) => {
 
 matching.on('price', (pairId: string, price: bigint) => {
   void conditionalEngine.onPrice(pairId, price)
-  markOracle.onTrade(pairId, { price, tradedAt: Date.now() } as any)
+  markOracle.onTrade(pairId, { price, tradedAt: Date.now() })
 })
 
 worker.on('settled', (_batch, txHash) => console.log('Settled:', txHash))
