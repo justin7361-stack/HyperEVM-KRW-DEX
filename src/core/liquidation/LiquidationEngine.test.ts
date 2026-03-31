@@ -102,7 +102,7 @@ describe('LiquidationEngine', () => {
     expect(submitFn).not.toHaveBeenCalled()
   })
 
-  it('partial liquidation — 20% per step, max 5 steps', async () => {
+  it('partial liquidation — 20% per step, 5 steps then auto-cleanup resets counter', async () => {
     const oracle = makeOracle(1000n)
     const submitFn = vi.fn().mockResolvedValue(undefined)
     const engine = new LiquidationEngine(oracle, submitFn)
@@ -112,8 +112,8 @@ describe('LiquidationEngine', () => {
 
     const pos = makePosition({ size: 1n * 10n ** 18n, margin: 1n })
 
-    // Call 7 times — max steps is 5
-    for (let i = 0; i < 7; i++) {
+    // Call 5 times — exactly fills the 5-step cycle; Map entry is auto-cleaned after step 5
+    for (let i = 0; i < 5; i++) {
       await engine.checkPositions([pos])
     }
 
@@ -126,6 +126,25 @@ describe('LiquidationEngine', () => {
       const order = call[0] as StoredOrder
       expect(order.amount).toBe(1n * 10n ** 18n * 20n / 100n)
     }
+  })
+
+  it('tiny position fallback — amount = full absSize when 20% truncates to 0', async () => {
+    // absSize = 4n → 4n * 20n / 100n = 0n → fallback to full 4n
+    // markPrice must be large enough so notional > 0 and margin check fails:
+    // notional = 4n * (1000n * 10n**18n) / 10n**18n = 4000n, minMargin = 100n
+    const oracle = makeOracle(1000n * 10n ** 18n)
+    const submittedOrders: StoredOrder[] = []
+    const submitFn = vi.fn().mockImplementation(async (order: StoredOrder) => {
+      submittedOrders.push(order)
+    })
+    const engine = new LiquidationEngine(oracle, submitFn)
+
+    // size = 4n (tiny), margin = 0n (definitely under-margined)
+    const pos = makePosition({ size: 4n, margin: 0n })
+    await engine.checkPositions([pos])
+
+    expect(submittedOrders).toHaveLength(1)
+    expect(submittedOrders[0].amount).toBe(4n)  // full fallback, not 0n
   })
 
   it('resetSteps — resets liquidation step counter', async () => {

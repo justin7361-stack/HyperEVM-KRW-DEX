@@ -40,12 +40,15 @@ export class LiquidationEngine extends EventEmitter {
 
         if (step >= 5) continue  // max steps reached — needs ADL or manual resolution
 
-        this.liquidationSteps.set(posKey, step + 1)
+        const newStep = step + 1
+        this.liquidationSteps.set(posKey, newStep)
+        // Auto-cleanup on final step — position handed to ADL/manual resolution
+        if (newStep >= 5) this.liquidationSteps.delete(posKey)
         this.emit('liquidation', {
           position: pos, markPrice,
-          reason: `margin ${pos.margin} < maintenance ${minMargin} (step ${step + 1}/5)`,
+          reason: `margin ${pos.margin} < maintenance ${minMargin} (step ${newStep}/5)`,
         } satisfies LiquidationEvent)
-        await this.submitLiquidationOrder(pos, markPrice, step)
+        await this.submitLiquidationOrder(pos, markPrice)
       }
     }
   }
@@ -55,11 +58,17 @@ export class LiquidationEngine extends EventEmitter {
     this.liquidationSteps.delete(posKey)
   }
 
-  private async submitLiquidationOrder(pos: MarginPosition, _markPrice: bigint, _step: number): Promise<void> {
+  /**
+   * Submits a partial liquidation market order for 20% of the position size.
+   * Design: the engine does not track remaining size — callers must pass the
+   * updated position on each checkPositions() call.
+   */
+  private async submitLiquidationOrder(pos: MarginPosition, _markPrice: bigint): Promise<void> {
     const LIQUIDATOR = '0x000000000000000000000000000000000000dead' as Hex
     const absSize = pos.size < 0n ? -pos.size : pos.size
     const partialAmount = absSize * 20n / 100n
-    const amount = partialAmount === 0n ? absSize : partialAmount  // fallback for tiny positions
+    // Fallback: integer truncation would produce 0 for tiny positions
+    const amount = partialAmount === 0n ? absSize : partialAmount
     const closeOrder: StoredOrder = {
       id:           uuid(),
       maker:        LIQUIDATOR,
@@ -70,7 +79,7 @@ export class LiquidationEngine extends EventEmitter {
       amount,
       isBuy:        pos.size < 0n,   // short position → buy to close
       nonce:        BigInt(Date.now()),
-      expiry:       BigInt(Math.floor(Date.now() / 1000) + 60),
+      expiry:       BigInt(Date.now()) / 1000n + 60n,
       signature:    '0x' as Hex,
       submittedAt:  Date.now(),
       filledAmount: 0n,
