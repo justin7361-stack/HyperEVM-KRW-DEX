@@ -60,8 +60,8 @@ export interface MatchResult {
   fillAmount: bigint
   price:      bigint      // execution price
   matchedAt:  number
-  makerFee?:  bigint      // in quoteToken units (optional, set by FeeEngine)
-  takerFee?:  bigint
+  makerFee?:  bigint      // quoteToken units, 18 decimals; positive = fee charged, negative = rebate
+  takerFee?:  bigint      // quoteToken units, 18 decimals; always positive (charged)
 }
 
 // ── Orderbook depth ─────────────────────────────────────────────────────────
@@ -122,10 +122,10 @@ export interface FundingRate {
 
 // ── Margin ───────────────────────────────────────────────────────────────────
 export interface MarginPosition {
-  maker:      Address
-  pairId:     string
-  size:       bigint    // baseToken, positive=long, negative=short
-  entryPrice: bigint
-  margin:     bigint    // quoteToken collateral for this position
-  mode:       MarginMode
+  maker:       Address
+  pairId:      string
+  size:        bigint    // baseToken, positive=long, negative=short
+  entryPrice:  bigint
+  margin:      bigint    // quoteToken collateral for this position
+  marginMode:  MarginMode
 }
