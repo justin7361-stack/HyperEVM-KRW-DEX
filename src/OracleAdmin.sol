@@ -53,6 +53,7 @@ contract OracleAdmin is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(token != address(0), "Zero address");
         require(initialPrice > 0, "Zero price");
+        require(initialPrice <= type(uint128).max, "Price overflow");
         require(maxStaleness > 0, "Zero staleness");
         require(maxDeltaBps > 0 && maxDeltaBps <= 10_000, "Invalid delta bps");
         require(rates[token].price == 0, "Already initialized");
@@ -61,10 +62,13 @@ contract OracleAdmin is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     }
 
     /// @notice Propose a new rate. Enforces delta guard. Effective after TIMELOCK_DELAY.
+    /// @dev If a pending rate already exists, it is overwritten with the new proposal
+    ///      and the timelock resets. This is intentional: the latest operator proposal wins.
     function proposeRate(address token, uint256 newPrice) external onlyRole(OPERATOR_ROLE) {
         Rate storage r = rates[token];
         require(r.price > 0, "Rate not initialized");
         require(newPrice > 0, "Zero price");
+        require(newPrice <= type(uint128).max, "Price overflow");
         _checkDelta(r.price, newPrice, r.maxDeltaBps);
 
         uint256 effectiveAt = block.timestamp + TIMELOCK_DELAY;
@@ -78,8 +82,11 @@ contract OracleAdmin is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         require(pending.price > 0, "No pending rate");
         require(block.timestamp >= pending.effectiveAt, "Timelock not elapsed");
 
-        rates[token].price     = pending.price;
-        rates[token].updatedAt = block.timestamp;
+        Rate storage r = rates[token];
+        _checkDelta(r.price, pending.price, r.maxDeltaBps); // re-validate against current price
+
+        r.price     = pending.price;
+        r.updatedAt = block.timestamp;
         delete pendingRates[token];
         emit RateApplied(token, pending.price);
     }
@@ -92,6 +99,7 @@ contract OracleAdmin is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         Rate storage r = rates[token];
         require(r.price > 0, "Rate not initialized");
         require(newPrice > 0, "Zero price");
+        require(newPrice <= type(uint128).max, "Price overflow");
         r.price     = newPrice;
         r.updatedAt = block.timestamp;
         delete pendingRates[token];

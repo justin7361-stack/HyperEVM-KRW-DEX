@@ -95,4 +95,40 @@ contract OracleAdminTest is Test {
         vm.expectRevert();
         impl.initialize(admin);
     }
+
+    function test_InitializeRate_RevertAlreadyInitialized() public {
+        vm.prank(admin);
+        vm.expectRevert("Already initialized");
+        oracle.initializeRate(usdc, INITIAL_PRICE, 4 hours, 500);
+    }
+
+    function test_ApplyRate_RevertNoPending() public {
+        vm.expectRevert("No pending rate");
+        oracle.applyRate(usdc);
+    }
+
+    function test_ProposeRate_RevertNonOperator() public {
+        vm.prank(admin);
+        vm.expectRevert();
+        oracle.proposeRate(usdc, 1380e18);
+    }
+
+    function test_ProposeRate_OverwritesPending() public {
+        uint256 firstPrice  = 1370e18;
+        uint256 secondPrice = 1380e18;
+
+        vm.prank(operator);
+        oracle.proposeRate(usdc, firstPrice);
+
+        uint256 firstEffectiveAt = block.timestamp + 2 hours;
+
+        vm.warp(block.timestamp + 1 hours);
+        vm.prank(operator);
+        oracle.proposeRate(usdc, secondPrice);
+
+        (uint256 price, uint256 effectiveAt) = oracle.pendingRates(usdc);
+        assertEq(price, secondPrice);
+        assertEq(effectiveAt, block.timestamp + 2 hours);
+        assertTrue(effectiveAt > firstEffectiveAt); // timelock reset
+    }
 }
