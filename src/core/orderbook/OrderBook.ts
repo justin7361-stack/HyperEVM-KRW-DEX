@@ -83,6 +83,12 @@ export class OrderBook {
         : await this.store.getBestBid(this.pairId)
       if (!counter || counter.id === cur.id) break
 
+      // STP: cancel taker (incoming) if same maker as resting order
+      if (counter.maker.toLowerCase() === cur.maker.toLowerCase()) {
+        await this.store.updateOrder(cur.id, { status: 'cancelled' })
+        break
+      }
+
       // Price check — skip when either side is a market order
       const isMarket = cur.orderType === 'market' || counter.orderType === 'market'
       if (!isMarket) {
