@@ -9,19 +9,26 @@ import "../src/BasicCompliance.sol";
 import "../src/FeeCollector.sol";
 import "../src/OrderSettlement.sol";
 import "../src/HybridPool.sol";
+import "../test/mocks/MockERC20.sol";
 
 contract Deploy is Script {
     function run() external {
         address admin    = vm.envAddress("ADMIN_ADDRESS");
         address operator = vm.envAddress("OPERATOR_ADDRESS");
         address guardian = vm.envAddress("GUARDIAN_ADDRESS");
-        address krw      = vm.envAddress("KRW_STABLECOIN_ADDRESS");
+        address krw      = vm.envOr("KRW_STABLECOIN_ADDRESS", address(0));
         address usdc     = vm.envOr("USDC_ADDRESS", address(0));
         address usdt     = vm.envOr("USDT_ADDRESS", address(0));
 
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
 
         vm.startBroadcast(deployerKey);
+
+        // 0. MockKRW stablecoin (testnet only — skip if real address provided)
+        if (krw == address(0)) {
+            krw = address(new MockERC20("KRW Stablecoin", "KRWS", 18));
+            console.log("MockKRW deployed:", krw);
+        }
 
         // 1. PairRegistry
         PairRegistry registry = PairRegistry(address(new ERC1967Proxy(
