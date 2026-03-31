@@ -10,7 +10,7 @@ import "../src/OrderSettlement.sol";
 /// @notice Post-deploy configuration script. Run once after Deploy.s.sol.
 contract Config is Script {
     function run() external {
-        uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        uint256 adminKey = vm.envUint("ADMIN_PRIVATE_KEY");
 
         address registry      = vm.envAddress("PAIR_REGISTRY_ADDRESS");
         address oracle        = vm.envAddress("ORACLE_ADMIN_ADDRESS");
@@ -19,7 +19,7 @@ contract Config is Script {
         address operator      = vm.envAddress("OPERATOR_ADDRESS");
         address usdc          = vm.envOr("USDC_ADDRESS", address(0));
 
-        vm.startBroadcast(deployerKey);
+        vm.startBroadcast(adminKey);
 
         // Grant FeeCollector DEPOSITOR_ROLE to settlement
         FeeCollector(feeCollector).grantRole(
