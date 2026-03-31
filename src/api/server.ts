@@ -22,19 +22,28 @@ import { adminRoutes } from '../admin/routes.js'
 import { TraderKeyStore, createTraderAuth, apiKeyManagementRoutes } from './auth/traderAuth.js'
 import { candlesRoutes } from './routes/candles.js'
 import type { CandleStore } from '../core/candles/CandleStore.js'
+import type { ConditionalOrderEngine } from '../core/conditional/ConditionalOrderEngine.js'
+import type { PositionTracker } from '../core/position/PositionTracker.js'
+import type { FundingRateEngine } from '../core/funding/FundingRateEngine.js'
+import { fundingRoutes } from './routes/funding.js'
 
 export function buildServer(deps: {
-  config:          Config
-  verifier:        IOrderVerifier
-  policy:          PolicyEngine
-  matching:        MatchingEngine
-  store:           IOrderBookStore
-  trades:          TradeStore
-  pairRegistry:    Clients['pairRegistry']
-  worker?:         SettlementWorker
-  blocklist?:      BasicBlocklistPlugin
-  traderKeyStore?: TraderKeyStore
-  candleStore?:    CandleStore
+  config:              Config
+  verifier:            IOrderVerifier
+  policy:              PolicyEngine
+  matching:            MatchingEngine
+  store:               IOrderBookStore
+  trades:              TradeStore
+  pairRegistry:        Clients['pairRegistry']
+  worker?:             SettlementWorker
+  blocklist?:          BasicBlocklistPlugin
+  traderKeyStore?:     TraderKeyStore
+  candleStore?:        CandleStore
+  conditionalEngine?:  ConditionalOrderEngine
+  positionTracker?:    PositionTracker
+  fundingEngine?:      FundingRateEngine
+  getMarkPrice?:       (pair: string) => bigint
+  getIndexPrice?:      (pair: string) => bigint
 }) {
   const { config, verifier, policy, matching, store, trades, pairRegistry, worker, blocklist } = deps
   const fastify = Fastify({ logger: true })
@@ -50,6 +59,10 @@ export function buildServer(deps: {
   fastify.register(streamRoutes(matching, trades))
 
   if (deps.candleStore) fastify.register(candlesRoutes(deps.candleStore))
+
+  if (deps.fundingEngine && deps.getMarkPrice && deps.getIndexPrice) {
+    fastify.register(fundingRoutes(deps.fundingEngine, deps.getMarkPrice, deps.getIndexPrice))
+  }
 
   // Admin dashboard static files + admin API routes (optional in tests)
   if (worker && blocklist) {

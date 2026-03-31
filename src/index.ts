@@ -14,6 +14,11 @@ import { ChainWatcher } from './core/watcher/ChainWatcher.js'
 import { TradeStore } from './api/routes/trades.js'
 import { buildServer } from './api/server.js'
 import { CandleStore } from './core/candles/CandleStore.js'
+import { FeeEngine } from './core/fees/FeeEngine.js'
+import { ConditionalOrderEngine } from './core/conditional/ConditionalOrderEngine.js'
+import { PositionTracker } from './core/position/PositionTracker.js'
+import { ExpiryWorker } from './core/expiry/ExpiryWorker.js'
+import { TraderKeyStore } from './api/auth/traderAuth.js'
 
 const config = loadConfig()
 const { publicClient, pairRegistry } = createClients(config)
@@ -30,13 +35,20 @@ const verifier  = new EIP712Verifier(domain)
 const policy    = new PolicyEngine()
 const store     = new MemoryOrderBookStore()
 const trades    = new TradeStore()
-const matching  = new MatchingEngine(store)
+const feeEngine = new FeeEngine()
+const matching  = new MatchingEngine(store, feeEngine)
 
 const blocklist = new BasicBlocklistPlugin(new Set())
 policy.register(blocklist)
 policy.register(new GeoBlockPlugin(new Set(config.blockedCountries)))
 
 const candleStore = new CandleStore()
+const positionTracker = new PositionTracker()
+const conditionalEngine = new ConditionalOrderEngine(
+  (order, pairId) => matching.submitOrder(order, pairId),
+)
+const expiryWorker = new ExpiryWorker(store)
+const traderKeyStore = new TraderKeyStore()
 
 const worker = new SettlementWorker({
   batchSize:      config.batchSize,
@@ -55,8 +67,13 @@ matching.on('matched', (match) => {
     tradedAt:     match.matchedAt,
   }
   worker.enqueue(match)
-  trades.add(pairId, tradeRecord)
+  positionTracker.onMatch(pairId, match)
   candleStore.onTrade(pairId, tradeRecord)
+  trades.add(pairId, tradeRecord)
+})
+
+matching.on('price', (pairId: string, price: bigint) => {
+  void conditionalEngine.onPrice(pairId, price)
 })
 
 worker.on('settled', (_batch, txHash) => console.log('Settled:', txHash))
@@ -65,13 +82,20 @@ worker.on('error',   (_batch, err)    => console.error('Settlement error:', err)
 const watcher = new ChainWatcher(publicClient, config.orderSettlementAddress, store)
 watcher.start()
 
-const server = buildServer({ config, verifier, policy, matching, store, trades, pairRegistry, worker, blocklist, candleStore })
+expiryWorker.start()
+
+const server = buildServer({
+  config, verifier, policy, matching, store, trades, pairRegistry,
+  worker, blocklist, candleStore,
+  conditionalEngine, positionTracker, traderKeyStore,
+})
 
 server.listen({ port: config.port, host: config.host }, (err) => {
   if (err) { console.error(err); process.exit(1) }
 })
 
 process.on('SIGTERM', async () => {
+  expiryWorker.stop()
   worker.stop()
   watcher.stop()
   await server.close()
