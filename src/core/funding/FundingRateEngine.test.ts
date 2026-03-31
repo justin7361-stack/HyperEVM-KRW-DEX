@@ -74,6 +74,51 @@ describe('FundingRateEngine', () => {
     expect(payments[0].amount).toBeGreaterThanOrEqual(0n)
   })
 
+  it('rate cap — positive extreme: raw rate >600% is clamped to 600%', async () => {
+    // mark = 1700, index = 100 → raw rate = (1700-100)/100 = 1600% → capped at 600%
+    const mark  = 1700n * 10n ** 18n
+    const index = 100n  * 10n ** 18n
+    // size = 1 ETH long
+    const pos = makePosition({ size: 1n * 10n ** 18n })
+
+    const payments: FundingPayment[] = []
+    engine.on('payment', (p: FundingPayment) => payments.push(p))
+
+    await engine.applyFunding(PAIR, () => [pos], () => mark, () => index)
+
+    expect(payments).toHaveLength(1)
+    // notional = absSize * mark / 1e18 = 1e18 * 1700e18 / 1e18 = 1700e18
+    const notional = 1n * 10n ** 18n * mark / 10n ** 18n
+    // cappedRate = 6 * RATE_SCALE, so rawPayment = notional * 6n * RATE_SCALE / RATE_SCALE = notional * 6n
+    const expectedRawPayment = notional * 6n
+    // Long pays → amount is negative
+    expect(payments[0].amount).toBe(-expectedRawPayment)
+    // rate field clamped to 6.0
+    expect(payments[0].rate).toBe(6.0)
+  })
+
+  it('rate cap — negative cap test: rate within ±600% is not clamped', async () => {
+    // mark = 100, index = 1700 → raw rate = (100-1700)/1700 ≈ -94.1% → within cap, no clamping
+    const mark  = 100n  * 10n ** 18n
+    const index = 1700n * 10n ** 18n
+    // size = 1 ETH long (long pays when mark < index is negative, so long receives)
+    const pos = makePosition({ size: 1n * 10n ** 18n })
+
+    const payments: FundingPayment[] = []
+    engine.on('payment', (p: FundingPayment) => payments.push(p))
+
+    await engine.applyFunding(PAIR, () => [pos], () => mark, () => index)
+
+    expect(payments).toHaveLength(1)
+    // rate ≈ -0.941 (within -6 to 6 range), so no clamping
+    expect(payments[0].rate).toBeGreaterThan(-6.0)
+    expect(payments[0].rate).toBeLessThan(0)
+    // rate should be close to (100 - 1700) / 1700 ≈ -0.9412
+    expect(payments[0].rate).toBeCloseTo(-16 / 17, 4)
+    // Long position with negative rate → long receives (amount > 0)
+    expect(payments[0].amount).toBeGreaterThan(0n)
+  })
+
   it('startPair() is idempotent — calling twice does not create two intervals; stopAll() clears all', () => {
     const getPositions  = () => []
     const getMarkPrice  = () => 1000n
