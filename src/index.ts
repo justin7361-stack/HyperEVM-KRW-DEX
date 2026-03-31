@@ -96,8 +96,8 @@ server.listen({ port: config.port, host: config.host }, (err) => {
 
 process.on('SIGTERM', async () => {
   expiryWorker.stop()
-  worker.stop()
   watcher.stop()
+  worker.stop()
   await server.close()
   process.exit(0)
 })
