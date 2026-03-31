@@ -56,6 +56,17 @@ export function ordersRoutes(
         return reply.status(400).send({ error: 'Order expired' })
       }
 
+      // Client Order ID dedup
+      if (order.clientOrderId) {
+        const existing = await store.getOrdersByMaker(order.maker)
+        const dup = existing.find(
+          o => o.clientOrderId === order.clientOrderId && (o.status === 'open' || o.status === 'partial')
+        )
+        if (dup) {
+          return reply.status(409).send({ error: 'Duplicate clientOrderId', orderId: dup.id })
+        }
+      }
+
       // 2. EIP-712 signature verification
       const valid = await verifier.verify(order, signature)
       if (!valid) {

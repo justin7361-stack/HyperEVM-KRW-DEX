@@ -87,6 +87,12 @@ export class MemoryOrderBookStore implements IOrderBookStore {
     return [...this.orders.values()].filter(o => o.maker.toLowerCase() === maker.toLowerCase())
   }
 
+  getAllOpenOrders(): StoredOrder[] {
+    return [...this.orders.values()].filter(
+      o => o.status === 'open' || o.status === 'partial'
+    )
+  }
+
   private getActiveOrdersForPair(pairId: string, isBuy: boolean): StoredOrder[] {
     return [...this.orders.values()].filter(o => {
       const oPairId = `${o.baseToken}/${o.quoteToken}`
