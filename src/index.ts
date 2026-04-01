@@ -23,6 +23,7 @@ import { FundingRateEngine } from './core/funding/FundingRateEngine.js'
 import { LiquidationEngine } from './core/liquidation/LiquidationEngine.js'
 import { MarkPriceOracle }   from './core/oracle/MarkPriceOracle.js'
 import { InsuranceFund }     from './core/insurance/InsuranceFund.js'
+import { MarginAccount }     from './margin/MarginAccount.js'
 
 const config = loadConfig()
 const { publicClient, pairRegistry } = createClients(config)
@@ -53,6 +54,9 @@ const conditionalEngine = new ConditionalOrderEngine(
 )
 const expiryWorker = new ExpiryWorker(store)
 const traderKeyStore = new TraderKeyStore()
+
+// ── Margin account ──────────────────────────────────────────────────────────
+const marginAccount  = new MarginAccount()
 
 // ── Perp engines ────────────────────────────────────────────────────────────
 const markOracle     = new MarkPriceOracle()
@@ -118,6 +122,7 @@ const server = buildServer({
   config, verifier, policy, matching, store, trades, pairRegistry,
   worker, blocklist, candleStore,
   conditionalEngine, positionTracker, traderKeyStore,
+  marginAccount,
 })
 
 server.listen({ port: config.port, host: config.host }, (err) => {

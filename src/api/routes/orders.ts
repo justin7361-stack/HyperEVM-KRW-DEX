@@ -7,6 +7,7 @@ import type { IOrderBookStore } from '../../core/orderbook/IOrderBookStore.js'
 import type { Order, StoredOrder } from '../../types/order.js'
 import type { Clients } from '../../chain/contracts.js'
 import type { Hex } from 'viem'
+import { MarginAccount } from '../../margin/MarginAccount.js'
 
 interface SubmitOrderBody {
   order:     Order
@@ -29,11 +30,12 @@ interface AmendBody {
 }
 
 export function ordersRoutes(
-  verifier:     IOrderVerifier,
-  policy:       PolicyEngine,
-  matching:     MatchingEngine,
-  store:        IOrderBookStore,
-  pairRegistry: Clients['pairRegistry'],
+  verifier:      IOrderVerifier,
+  policy:        PolicyEngine,
+  matching:      MatchingEngine,
+  store:         IOrderBookStore,
+  pairRegistry:  Clients['pairRegistry'],
+  marginAccount: MarginAccount,
 ) {
   return async function (fastify: FastifyInstance) {
     // POST /orders — submit a signed order
@@ -43,10 +45,13 @@ export function ordersRoutes(
       // Convert JSON numbers/strings to bigint (HTTP JSON doesn't have bigint type)
       const parsedOrder: Order = {
         ...req.body.order,
-        price:  BigInt(req.body.order.price as unknown as string),
-        amount: BigInt(req.body.order.amount as unknown as string),
-        nonce:  BigInt(req.body.order.nonce as unknown as string),
-        expiry: BigInt(req.body.order.expiry as unknown as string),
+        price:    BigInt(req.body.order.price as unknown as string),
+        amount:   BigInt(req.body.order.amount as unknown as string),
+        nonce:    BigInt(req.body.order.nonce as unknown as string),
+        expiry:   BigInt(req.body.order.expiry as unknown as string),
+        leverage: req.body.order.leverage != null
+          ? BigInt(req.body.order.leverage as unknown as string)
+          : undefined,
       }
       const order = parsedOrder
 
@@ -93,7 +98,17 @@ export function ordersRoutes(
         return reply.status(403).send({ error: policyResult.reason ?? 'Compliance check failed' })
       }
 
-      // 5. Store and match
+      // 5. Margin check — only for Perp orders (order has marginMode set)
+      if (order.marginMode) {
+        const leverage    = order.leverage ?? 1n
+        const notional    = order.amount * order.price / (10n ** 18n)
+        const reqMargin   = MarginAccount.requiredMargin(notional, leverage)
+        if (!marginAccount.canOpen(order.maker, order.marginMode, reqMargin)) {
+          return reply.status(400).send({ error: 'Insufficient margin' })
+        }
+      }
+
+      // 6. Store and match
       const stored: StoredOrder = {
         ...order,
         id:           uuid(),

@@ -41,6 +41,7 @@ export interface Order {
   // ── Position management ─────────────────────────────────────────────────
   reduceOnly?:  boolean         // reject if no matching open position
   marginMode?:  MarginMode      // 'cross' | 'isolated' (Perp only)
+  leverage?:    bigint          // e.g. 10n = 10x; default 1n if absent
 
   // ── Client-side dedup / tracking ────────────────────────────────────────
   clientOrderId?: string        // trader-supplied ID; unique per (maker, status=open)

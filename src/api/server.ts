@@ -26,6 +26,7 @@ import type { ConditionalOrderEngine } from '../core/conditional/ConditionalOrde
 import type { PositionTracker } from '../core/position/PositionTracker.js'
 import type { FundingRateEngine } from '../core/funding/FundingRateEngine.js'
 import { fundingRoutes } from './routes/funding.js'
+import { MarginAccount } from '../margin/MarginAccount.js'
 
 export function buildServer(deps: {
   config:              Config
@@ -44,6 +45,7 @@ export function buildServer(deps: {
   fundingEngine?:      FundingRateEngine
   getMarkPrice?:       (pair: string) => bigint
   getIndexPrice?:      (pair: string) => bigint
+  marginAccount?:      MarginAccount
 }) {
   const { config, verifier, policy, matching, store, trades, pairRegistry, worker, blocklist } = deps
   const fastify = Fastify({ logger: true })
@@ -52,7 +54,7 @@ export function buildServer(deps: {
   fastify.register(fastifyRateLimit, { max: 100, timeWindow: '1 minute' })
   fastify.register(fastifyWebSocket)
 
-  fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry))
+  fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry, deps.marginAccount ?? new MarginAccount()))
   fastify.register(ordersBatchRoutes(verifier, policy, matching, pairRegistry))
   fastify.register(orderbookRoutes(matching))
   fastify.register(tradesRoutes(trades))

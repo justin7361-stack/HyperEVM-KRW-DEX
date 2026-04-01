@@ -7,6 +7,7 @@ import type { MatchingEngine } from '../../core/matching/MatchingEngine.js'
 import type { IOrderBookStore } from '../../core/orderbook/IOrderBookStore.js'
 import type { StoredOrder } from '../../types/order.js'
 import type { Clients } from '../../chain/contracts.js'
+import { MarginAccount } from '../../margin/MarginAccount.js'
 
 // ── Mock dependencies ──────────────────────────────────────────────────────
 
@@ -27,6 +28,8 @@ const pairRegistry = {
     isTradeAllowed: vi.fn().mockResolvedValue(true),
   },
 } as unknown as Clients['pairRegistry']
+
+const defaultMarginAccount = new MarginAccount()
 
 // ── Valid order fixture ────────────────────────────────────────────────────
 
@@ -87,7 +90,7 @@ describe('POST /orders — clientOrderId dedup', () => {
     }
 
     const fastify = Fastify({ logger: false })
-    fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry))
+    fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry, defaultMarginAccount))
 
     const res = await fastify.inject({
       method: 'POST',
@@ -122,7 +125,7 @@ describe('POST /orders — clientOrderId dedup', () => {
     }
 
     const fastify = Fastify({ logger: false })
-    fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry))
+    fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry, defaultMarginAccount))
 
     const res = await fastify.inject({
       method: 'POST',
@@ -155,12 +158,92 @@ describe('POST /orders — clientOrderId dedup', () => {
     }
 
     const fastify = Fastify({ logger: false })
-    fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry))
+    fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry, defaultMarginAccount))
 
     const res = await fastify.inject({
       method: 'POST',
       url: '/orders',
       payload: baseOrderBody,
+    })
+
+    expect(res.statusCode).toBe(201)
+  })
+})
+
+// ── Tests: margin check ────────────────────────────────────────────────────
+
+describe('POST /orders — margin check', () => {
+  const store: IOrderBookStore = {
+    getOrdersByMaker: vi.fn().mockResolvedValue([]),
+    addOrder:         vi.fn(),
+    removeOrder:      vi.fn(),
+    updateOrder:      vi.fn(),
+    getOrder:         vi.fn(),
+    getBestBid:       vi.fn(),
+    getBestAsk:       vi.fn(),
+    getOpenOrders:    vi.fn(),
+    getDepth:         vi.fn(),
+  }
+
+  it('Perp order with insufficient margin returns 400', async () => {
+    const marginAccount = new MarginAccount()
+    // deposit nothing — no margin available
+
+    const fastify = Fastify({ logger: false })
+    fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry, marginAccount))
+
+    const res = await fastify.inject({
+      method: 'POST',
+      url: '/orders',
+      payload: {
+        ...baseOrderBody,
+        order: {
+          ...baseOrderBody.order,
+          marginMode: 'cross',
+          leverage:   '10',
+        },
+      },
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toBe('Insufficient margin')
+  })
+
+  it('Perp order with sufficient margin returns 201', async () => {
+    const marginAccount = new MarginAccount()
+    // price=1e18, amount=5e17, notional = 5e17*1e18/1e18 = 5e17, leverage=10 → reqMargin=5e16
+    marginAccount.deposit(MAKER, 10n ** 18n)  // deposit 1 ETH equivalent — more than enough
+
+    const fastify = Fastify({ logger: false })
+    fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry, marginAccount))
+
+    const res = await fastify.inject({
+      method: 'POST',
+      url: '/orders',
+      payload: {
+        ...baseOrderBody,
+        order: {
+          ...baseOrderBody.order,
+          marginMode: 'cross',
+          leverage:   '10',
+        },
+      },
+    })
+
+    expect(res.statusCode).toBe(201)
+  })
+
+  it('Spot order (no marginMode) skips margin check', async () => {
+    const marginAccount = new MarginAccount()
+    // no margin deposited — but should not matter for spot orders
+
+    const fastify = Fastify({ logger: false })
+    fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry, marginAccount))
+
+    const res = await fastify.inject({
+      method: 'POST',
+      url: '/orders',
+      payload: baseOrderBody,  // no marginMode set
     })
 
     expect(res.statusCode).toBe(201)

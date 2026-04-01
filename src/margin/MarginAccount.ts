@@ -40,8 +40,27 @@ export class MarginAccount {
     return { maker, totalBalance, usedMargin, freeMargin: totalBalance - usedMargin, positions }
   }
 
-  canOpen(maker: Address, _mode: MarginMode, requiredMargin: bigint): boolean {
-    return this.getState(maker).freeMargin >= requiredMargin
+  /**
+   * Check if maker can open a position of the given size.
+   * Cross mode:    effectiveMargin = totalBalance (free across all positions)
+   * Isolated mode: effectiveMargin = freeMargin (totalBalance - sum of isolated position margins)
+   * In both cases, effectiveMargin must cover requiredMargin.
+   */
+  canOpen(maker: Address, mode: MarginMode, requiredMargin: bigint): boolean {
+    const state = this.getState(maker)
+    const effective = mode === 'cross' ? state.totalBalance : state.freeMargin
+    return effective >= requiredMargin
+  }
+
+  /**
+   * Compute required margin from notional value and leverage.
+   * requiredMargin = notional / leverage
+   * Minimum 1n to prevent division-by-zero edge.
+   */
+  static requiredMargin(notional: bigint, leverage: bigint): bigint {
+    if (leverage <= 0n) throw new Error('leverage must be positive')
+    const margin = notional / leverage
+    return margin === 0n ? 1n : margin
   }
 
   applyPnl(maker: Address, pnl: bigint): void {
