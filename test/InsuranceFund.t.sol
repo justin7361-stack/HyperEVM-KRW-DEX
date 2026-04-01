@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import "forge-std/Test.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/IAccessControl.sol";
 import "../src/InsuranceFund.sol";
 
 contract MockERC20 is ERC20 {
@@ -19,6 +20,8 @@ contract InsuranceFundTest is Test {
     address operator = makeAddr("operator");
     address guardian = makeAddr("guardian");
     address alice    = makeAddr("alice");
+
+    bytes32 constant PAIR_ID = keccak256("ETH/KRW");
 
     function setUp() public {
         token = new MockERC20("KRW", "KRW");
@@ -44,27 +47,31 @@ contract InsuranceFundTest is Test {
 
     /// @dev Deposit 100e18 → balance == 100e18
     function test_deposit_increasesBalance() public {
-        bytes32 opRole = fund.OPERATOR_ROLE();
         vm.prank(operator);
-        fund.deposit(address(token), 100 ether);
+        fund.deposit(PAIR_ID, address(token), 100 ether);
 
-        assertEq(fund.balances(address(token)), 100 ether);
-        assertEq(fund.getBalance(address(token)), 100 ether);
-        (opRole); // suppress unused warning
+        assertEq(fund.getBalance(PAIR_ID, address(token)), 100 ether);
     }
 
     /// @dev deposit(0) reverts with "Zero amount"
     function test_deposit_zeroAmount_reverts() public {
         vm.prank(operator);
         vm.expectRevert(bytes("Zero amount"));
-        fund.deposit(address(token), 0);
+        fund.deposit(PAIR_ID, address(token), 0);
     }
 
     /// @dev Non-operator calling deposit reverts
     function test_deposit_onlyOperator_reverts() public {
+        bytes32 opRole = fund.OPERATOR_ROLE();
         vm.prank(alice);
-        vm.expectRevert();
-        fund.deposit(address(token), 100 ether);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                alice,
+                opRole
+            )
+        );
+        fund.deposit(PAIR_ID, address(token), 100 ether);
     }
 
     // -------------------------------------------------------------------------
@@ -74,42 +81,42 @@ contract InsuranceFundTest is Test {
     /// @dev balance=100, loss=60 → covered=60, shortfall=0, remaining balance=40
     function test_cover_fullyCovered() public {
         vm.prank(operator);
-        fund.deposit(address(token), 100 ether);
+        fund.deposit(PAIR_ID, address(token), 100 ether);
 
         uint256 opBalBefore = token.balanceOf(operator);
 
         vm.prank(operator);
-        (uint256 covered, uint256 shortfall) = fund.cover(address(token), 60 ether);
+        (uint256 covered, uint256 shortfall) = fund.cover(PAIR_ID, address(token), 60 ether);
 
         assertEq(covered,   60 ether, "covered");
         assertEq(shortfall, 0,        "shortfall");
-        assertEq(fund.getBalance(address(token)), 40 ether, "fund balance");
+        assertEq(fund.getBalance(PAIR_ID, address(token)), 40 ether, "fund balance");
         assertEq(token.balanceOf(operator), opBalBefore + 60 ether, "operator received");
     }
 
     /// @dev balance=30, loss=100 → covered=30, shortfall=70, emits InsuranceFundExhausted
     function test_cover_partiallyCovered_emitsExhausted() public {
         vm.prank(operator);
-        fund.deposit(address(token), 30 ether);
+        fund.deposit(PAIR_ID, address(token), 30 ether);
 
-        vm.expectEmit(true, false, false, true);
-        emit InsuranceFund.InsuranceFundExhausted(address(token), 70 ether);
+        vm.expectEmit(true, true, false, true);
+        emit InsuranceFund.InsuranceFundExhausted(PAIR_ID, address(token), 70 ether);
 
         vm.prank(operator);
-        (uint256 covered, uint256 shortfall) = fund.cover(address(token), 100 ether);
+        (uint256 covered, uint256 shortfall) = fund.cover(PAIR_ID, address(token), 100 ether);
 
         assertEq(covered,   30 ether, "covered");
         assertEq(shortfall, 70 ether, "shortfall");
-        assertEq(fund.getBalance(address(token)), 0, "fund drained");
+        assertEq(fund.getBalance(PAIR_ID, address(token)), 0, "fund drained");
     }
 
     /// @dev No deposit, loss=50 → covered=0, shortfall=50
     function test_cover_emptyFund_fullShortfall() public {
-        vm.expectEmit(true, false, false, true);
-        emit InsuranceFund.InsuranceFundExhausted(address(token), 50 ether);
+        vm.expectEmit(true, true, false, true);
+        emit InsuranceFund.InsuranceFundExhausted(PAIR_ID, address(token), 50 ether);
 
         vm.prank(operator);
-        (uint256 covered, uint256 shortfall) = fund.cover(address(token), 50 ether);
+        (uint256 covered, uint256 shortfall) = fund.cover(PAIR_ID, address(token), 50 ether);
 
         assertEq(covered,   0,        "covered zero");
         assertEq(shortfall, 50 ether, "full shortfall");
@@ -118,11 +125,11 @@ contract InsuranceFundTest is Test {
     /// @dev loss=0 → (0, 0), no events emitted
     function test_cover_zeroLoss_returnsZero() public {
         vm.prank(operator);
-        fund.deposit(address(token), 100 ether);
+        fund.deposit(PAIR_ID, address(token), 100 ether);
 
         vm.recordLogs();
         vm.prank(operator);
-        (uint256 covered, uint256 shortfall) = fund.cover(address(token), 0);
+        (uint256 covered, uint256 shortfall) = fund.cover(PAIR_ID, address(token), 0);
 
         assertEq(covered,   0, "covered");
         assertEq(shortfall, 0, "shortfall");
@@ -134,9 +141,16 @@ contract InsuranceFundTest is Test {
 
     /// @dev Non-operator calling cover reverts
     function test_cover_onlyOperator_reverts() public {
+        bytes32 opRole = fund.OPERATOR_ROLE();
         vm.prank(alice);
-        vm.expectRevert();
-        fund.cover(address(token), 10 ether);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                alice,
+                opRole
+            )
+        );
+        fund.cover(PAIR_ID, address(token), 10 ether);
     }
 
     // -------------------------------------------------------------------------
@@ -146,25 +160,45 @@ contract InsuranceFundTest is Test {
     /// @dev Admin withdraws: balance decreases, tokens transferred
     function test_withdraw_adminOnly() public {
         vm.prank(operator);
-        fund.deposit(address(token), 100 ether);
+        fund.deposit(PAIR_ID, address(token), 100 ether);
 
         uint256 aliceBalBefore = token.balanceOf(alice);
 
         vm.prank(admin);
-        fund.withdraw(address(token), alice, 40 ether);
+        fund.withdraw(PAIR_ID, address(token), alice, 40 ether);
 
-        assertEq(fund.getBalance(address(token)), 60 ether, "fund balance");
+        assertEq(fund.getBalance(PAIR_ID, address(token)), 60 ether, "fund balance");
         assertEq(token.balanceOf(alice), aliceBalBefore + 40 ether, "alice received");
+    }
+
+    /// @dev Non-admin calling withdraw reverts
+    function test_withdraw_nonAdmin_reverts() public {
+        address token_addr = address(token);
+        vm.startPrank(operator);
+        token.approve(address(fund), 50 ether);
+        fund.deposit(PAIR_ID, token_addr, 50 ether);
+        vm.stopPrank();
+
+        bytes32 adminRole = fund.DEFAULT_ADMIN_ROLE();
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                alice,
+                adminRole
+            )
+        );
+        fund.withdraw(PAIR_ID, token_addr, address(alice), 10 ether);
     }
 
     /// @dev withdraw more than balance reverts
     function test_withdraw_insufficientBalance_reverts() public {
         vm.prank(operator);
-        fund.deposit(address(token), 50 ether);
+        fund.deposit(PAIR_ID, address(token), 50 ether);
 
         vm.prank(admin);
         vm.expectRevert(bytes("Insufficient balance"));
-        fund.withdraw(address(token), alice, 100 ether);
+        fund.withdraw(PAIR_ID, address(token), alice, 100 ether);
     }
 
     // -------------------------------------------------------------------------
@@ -173,6 +207,8 @@ contract InsuranceFundTest is Test {
 
     /// @dev Guardian can pause; operator cannot unpause (only admin can)
     function test_pause_guardianCanPause_operatorCannotUnpause() public {
+        bytes32 adminRole = fund.DEFAULT_ADMIN_ROLE();
+
         // Guardian pauses
         vm.prank(guardian);
         fund.pause();
@@ -180,11 +216,17 @@ contract InsuranceFundTest is Test {
         // deposit reverts while paused
         vm.prank(operator);
         vm.expectRevert();
-        fund.deposit(address(token), 1 ether);
+        fund.deposit(PAIR_ID, address(token), 1 ether);
 
         // Operator cannot unpause
         vm.prank(operator);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                operator,
+                adminRole
+            )
+        );
         fund.unpause();
 
         // Admin can unpause
@@ -193,8 +235,8 @@ contract InsuranceFundTest is Test {
 
         // deposit works again
         vm.prank(operator);
-        fund.deposit(address(token), 1 ether);
-        assertEq(fund.getBalance(address(token)), 1 ether);
+        fund.deposit(PAIR_ID, address(token), 1 ether);
+        assertEq(fund.getBalance(PAIR_ID, address(token)), 1 ether);
     }
 
     // -------------------------------------------------------------------------
@@ -203,6 +245,6 @@ contract InsuranceFundTest is Test {
 
     /// @dev getBalance for unknown token returns 0
     function test_getBalance_unknownToken_returnsZero() public view {
-        assertEq(fund.getBalance(address(0xdead)), 0);
+        assertEq(fund.getBalance(PAIR_ID, address(0xdead)), 0);
     }
 }
