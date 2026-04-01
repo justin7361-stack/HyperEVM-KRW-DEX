@@ -5,6 +5,7 @@ import "forge-std/Test.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/IAccessControl.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "../src/MarginRegistry.sol";
 
 contract MockERC20 is ERC20 {
@@ -225,7 +226,7 @@ contract MarginRegistryTest is Test {
         registry.pause();
 
         vm.prank(trader);
-        vm.expectRevert();
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         registry.addMargin(PAIR_ID, 100 ether);
     }
 
@@ -243,7 +244,7 @@ contract MarginRegistryTest is Test {
 
         // updatePosition reverts while paused
         vm.prank(operator);
-        vm.expectRevert();
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         registry.updatePosition(trader, PAIR_ID, 1 ether, 100 ether, MarginRegistry.MarginMode.CROSS);
 
         // Operator cannot unpause
@@ -295,5 +296,27 @@ contract MarginRegistryTest is Test {
         registry.setQuoteToken(newPair, address(token));
 
         assertEq(registry.quoteTokens(newPair), address(token), "quote token stored");
+    }
+
+    // -------------------------------------------------------------------------
+    // 14. test_addMargin_quoteTokenNotSet_reverts
+    // -------------------------------------------------------------------------
+
+    /// @dev Reverts when quoteToken has not been set for the pair
+    function test_addMargin_quoteTokenNotSet_reverts() public {
+        bytes32 unknownPair = keccak256("BTC/KRW");
+        // Give the trader a position on this pair (operator sets it)
+        bytes32 opRole2 = registry.OPERATOR_ROLE();
+        vm.startPrank(admin);
+        registry.grantRole(opRole2, operator);
+        vm.stopPrank();
+
+        vm.prank(operator);
+        registry.updatePosition(trader, unknownPair, 1 ether, 100 ether, MarginRegistry.MarginMode.ISOLATED);
+
+        // Try to add margin — quoteToken not set for unknownPair
+        vm.prank(trader);
+        vm.expectRevert(bytes("quote token not set"));
+        registry.addMargin(unknownPair, 10 ether);
     }
 }

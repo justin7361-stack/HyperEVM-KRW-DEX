@@ -93,6 +93,7 @@ contract MarginRegistry is
         whenNotPaused
     {
         require(maker != address(0), "zero maker");
+        require(size != type(int256).min, "invalid size");
         // If size is 0 the position is closed — margin must be 0 too
         if (size == 0) require(margin == 0, "margin must be zero when closed");
 
@@ -155,6 +156,7 @@ contract MarginRegistry is
     ) external view returns (bool) {
         Position memory pos = positions[maker][pairId];
         if (pos.size == 0) return false;
+        require(maintenanceBps > 0, "zero bps");
 
         uint256 absSize  = pos.size > 0 ? uint256(pos.size) : uint256(-pos.size);
         // notionalValue = |size| × markPrice / 1e18
@@ -175,6 +177,7 @@ contract MarginRegistry is
         nonReentrant
     {
         require(to != address(0), "zero recipient");
+        require(amount > 0, "zero amount");
         IERC20(token).safeTransfer(to, amount);
         emit MarginWithdrawn(token, to, amount);
     }
