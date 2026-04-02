@@ -248,4 +248,52 @@ describe('POST /orders — margin check', () => {
 
     expect(res.statusCode).toBe(201)
   })
+
+  it('Perp order without leverage field defaults to 1x (full notional required)', async () => {
+    const marginAccount = new MarginAccount()
+    // price=1e18, amount=5e17 → notional=5e17, leverage defaults to 1n → reqMargin=5e17
+    // deposit exactly 5e17 — should pass
+    marginAccount.deposit(MAKER, 5n * 10n ** 17n)
+
+    const fastify = Fastify({ logger: false })
+    fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry, marginAccount))
+
+    const res = await fastify.inject({
+      method: 'POST',
+      url: '/orders',
+      payload: {
+        ...baseOrderBody,
+        order: {
+          ...baseOrderBody.order,
+          marginMode: 'cross',
+          // leverage intentionally omitted — should default to 1n
+        },
+      },
+    })
+
+    expect(res.statusCode).toBe(201)
+  })
+
+  it('Perp order with leverage as JSON number (not string) is handled correctly', async () => {
+    const marginAccount = new MarginAccount()
+    marginAccount.deposit(MAKER, 10n ** 18n)
+
+    const fastify = Fastify({ logger: false })
+    fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry, marginAccount))
+
+    const res = await fastify.inject({
+      method: 'POST',
+      url: '/orders',
+      payload: {
+        ...baseOrderBody,
+        order: {
+          ...baseOrderBody.order,
+          marginMode: 'cross',
+          leverage:   10,  // JSON number, not string — coercion path
+        },
+      },
+    })
+
+    expect(res.statusCode).toBe(201)
+  })
 })
