@@ -176,6 +176,9 @@ const server = buildServer({
   worker, blocklist, candleStore,
   conditionalEngine, positionTracker, traderKeyStore,
   marginAccount,
+  fundingEngine,
+  getMarkPrice:  (pair: string) => markOracle.getMarkPrice(pair),
+  getIndexPrice: (pair: string) => markOracle.getIndexPrice(pair),
 })
 
 server.listen({ port: config.port, host: config.host }, (err) => {

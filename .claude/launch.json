@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "admin-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "src/admin/public", "-p", "4321", "--no-clipboard"],
+      "port": 4321
+    }
+  ]
+}
