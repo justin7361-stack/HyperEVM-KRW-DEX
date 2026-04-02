@@ -26,6 +26,8 @@ import type { ConditionalOrderEngine } from '../core/conditional/ConditionalOrde
 import type { PositionTracker } from '../core/position/PositionTracker.js'
 import type { FundingRateEngine } from '../core/funding/FundingRateEngine.js'
 import { fundingRoutes } from './routes/funding.js'
+import { marginRoutes } from './routes/margin.js'
+import { positionsRoutes } from './routes/positions.js'
 import { MarginAccount } from '../margin/MarginAccount.js'
 
 export function buildServer(deps: {
@@ -64,6 +66,20 @@ export function buildServer(deps: {
 
   if (deps.fundingEngine && deps.getMarkPrice && deps.getIndexPrice) {
     fastify.register(fundingRoutes(deps.fundingEngine, deps.getMarkPrice, deps.getIndexPrice))
+  }
+
+  // Margin deposit/withdraw/query
+  if (deps.marginAccount) {
+    fastify.register(marginRoutes(deps.marginAccount))
+  }
+
+  // Position tracking
+  if (deps.positionTracker) {
+    fastify.register(positionsRoutes(
+      deps.positionTracker,
+      deps.marginAccount ?? new MarginAccount(),
+      deps.getMarkPrice,
+    ))
   }
 
   // Admin dashboard static files + admin API routes (optional in tests)

@@ -263,21 +263,39 @@ export function ordersRoutes(
       return reply.status(201).send({ orderId: amended.id })
     })
 
-    // GET /orders/:address — open orders for a maker
-    fastify.get<{ Params: { address: string } }>('/orders/:address', async (req, reply) => {
+    // GET /orders/:address — orders for a maker
+    // Query params:
+    //   ?status=open      → open + partial (default)
+    //   ?status=filled    → filled only
+    //   ?status=all       → all statuses
+    fastify.get<{
+      Params: { address: string }
+      Querystring: { status?: string }
+    }>('/orders/:address', async (req, reply) => {
+      const statusFilter = req.query.status ?? 'open'
       const orders = await store.getOrdersByMaker(req.params.address)
-      return reply.send({
-        orders: orders
-          .filter(o => o.status === 'open')
-          .map(o => ({
-            ...o,
-            price:        o.price.toString(),
-            amount:       o.amount.toString(),
-            nonce:        o.nonce.toString(),
-            expiry:       o.expiry.toString(),
-            filledAmount: o.filledAmount.toString(),
-          })),
+
+      const filtered = orders.filter(o => {
+        if (statusFilter === 'all')    return true
+        if (statusFilter === 'filled') return o.status === 'filled'
+        return o.status === 'open' || o.status === 'partial'
       })
+
+      const serialized = filtered.map(o => ({
+        ...o,
+        // Map internal id → orderId for frontend compatibility
+        orderId:      o.id,
+        // Convert all bigint fields to strings for JSON serialization
+        price:        o.price.toString(),
+        amount:       o.amount.toString(),
+        nonce:        o.nonce.toString(),
+        expiry:       o.expiry.toString(),
+        filledAmount: o.filledAmount.toString(),
+        ...(o.leverage      != null && { leverage:      o.leverage.toString() }),
+        ...(o.triggerPrice  != null && { triggerPrice:  o.triggerPrice.toString() }),
+        ...(o.goodTillTime  != null && { goodTillTime:  o.goodTillTime.toString() }),
+      }))
+      return reply.type('application/json').send(JSON.stringify({ orders: serialized }))
     })
   }
 }
