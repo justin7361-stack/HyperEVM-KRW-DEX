@@ -32,6 +32,42 @@ This is the **HyperKRW** project: a CLOB DEX built on HyperEVM (Hyperliquid L1) 
 
 ---
 
+## 개발 철학 (Development Philosophy)
+
+### 오픈소스 우선 원칙 (Open Source First)
+
+**항상 상용화를 염두에 두고, 새 기능을 개발하기 전에 반드시 오픈소스를 먼저 비교 분석한다.**
+
+#### 의사결정 순서
+```
+1. 기능 요구사항 정의
+2. 동종 오픈소스 구현 조사 (dYdX v4, Hyperliquid, Orderly, Paradex, Curve, Uniswap 등)
+3. 포킹 vs. 직접 구현 판단:
+   ┌─ 포킹 우선 조건:
+   │   - 검증된 수학 공식 (StableSwap, 청산 가격 등)
+   │   - 보안 감사 받은 패턴 (CEI, ReentrancyGuard 적용 방식 등)
+   │   - 업계 표준 인터페이스 (EIP-712, Chainlink AggregatorV3 등)
+   │   - KRW 특화 수정이 최소인 경우
+   └─ 직접 구현 조건:
+       - KRW 기반 구조로 전면 수정이 필요한 경우
+       - 오픈소스가 다른 언어/프레임워크라 변환 비용 > 직접 작성 비용
+       - HyperKRW 고유 기능 (STP, 서버-컨트랙트 연동 등)
+4. 포킹 시: 출처 명시, 변경 사항 문서화
+5. 직접 작성 시: research.md의 참조 구현과 비교 검증
+```
+
+#### 주요 참조 오픈소스
+| 컴포넌트 | 1차 참조 | 2차 참조 |
+|---------|---------|---------|
+| StableSwap AMM | [Curve 2-pool](https://github.com/curvefi/curve-contract) | [Uniswap v2 core](https://github.com/Uniswap/v2-core) |
+| EIP-712 결제 | [Orderly EVM contracts](https://github.com/OrderlyNetwork/contract-evm) | [Seaport](https://github.com/ProjectOpenSea/seaport) |
+| 펀딩 레이트 | [dYdX v4 perpetuals](https://github.com/dydxprotocol/v4-chain/tree/main/protocol/x/perpetuals) | Hyperliquid docs |
+| 청산 엔진 | [dYdX v4 subaccounts](https://github.com/dydxprotocol/v4-chain/tree/main/protocol/x/subaccounts) | Paradex docs |
+| 오라클 인터페이스 | [Chainlink AggregatorV3](https://github.com/smartcontractkit/chainlink) | Pyth SDK |
+| UUPS 업그레이드 | [OZ UUPS pattern](https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable) | — |
+
+---
+
 ## Coding Standards
 
 ### Solidity
