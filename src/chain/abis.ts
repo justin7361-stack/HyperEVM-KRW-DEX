@@ -102,6 +102,31 @@ export const PAIR_REGISTRY_ABI = [
     ],
     outputs: [{ type: 'bool' }],
   },
+  {
+    // Returns all registered pair IDs (bytes32[]).
+    // Added to PairRegistry.sol for server startup resolver build.
+    name: 'getAllPairIds',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'bytes32[]' }],
+  },
+  {
+    // Returns full Pair struct for a given pairId.
+    name: 'pairs',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'pairId', type: 'bytes32' }],
+    outputs: [
+      { name: 'baseToken',     type: 'address' },
+      { name: 'quoteToken',    type: 'address' },
+      { name: 'tickSize',      type: 'uint256' },
+      { name: 'lotSize',       type: 'uint256' },
+      { name: 'minOrderSize',  type: 'uint256' },
+      { name: 'maxOrderSize',  type: 'uint256' },
+      { name: 'active',        type: 'bool'    },
+    ],
+  },
 ] as const
 
 export const ORACLE_ADMIN_ABI = [

@@ -23,7 +23,9 @@ import { FundingRateEngine } from './core/funding/FundingRateEngine.js'
 import { LiquidationEngine } from './core/liquidation/LiquidationEngine.js'
 import { MarkPriceOracle }   from './core/oracle/MarkPriceOracle.js'
 import { InsuranceFund }     from './core/insurance/InsuranceFund.js'
+import { InsuranceFundSyncer } from './core/insurance/InsuranceFundSyncer.js'
 import { MarginAccount }     from './margin/MarginAccount.js'
+import { keccak256, encodePacked } from 'viem'
 
 const config = loadConfig()
 const { publicClient, pairRegistry } = createClients(config)
@@ -41,14 +43,17 @@ const policy    = new PolicyEngine()
 const store     = new MemoryOrderBookStore()
 const trades    = new TradeStore()
 const feeEngine = new FeeEngine()
-const matching  = new MatchingEngine(store, feeEngine)
+
+// PositionTracker must be created before MatchingEngine so it can be
+// passed as positionReader for reduce-only order validation (G-7).
+const positionTracker = new PositionTracker()
+const matching  = new MatchingEngine(store, feeEngine, positionTracker)
 
 const blocklist = new BasicBlocklistPlugin(new Set())
 policy.register(blocklist)
 policy.register(new GeoBlockPlugin(new Set(config.blockedCountries)))
 
 const candleStore = new CandleStore()
-const positionTracker = new PositionTracker()
 const conditionalEngine = new ConditionalOrderEngine(
   (order, pairId) => matching.submitOrder(order, pairId),
 )
@@ -110,6 +115,54 @@ worker.on('error',   (_batch, err)    => console.error('Settlement error:', err)
 const watcher = new ChainWatcher(publicClient, config.orderSettlementAddress, store)
 watcher.start()
 
+// ── PairId resolver: keccak256(baseToken+quoteToken) bytes32 → off-chain pairId string (G-9)
+// Reads all registered pairs from PairRegistry at startup, then starts
+// InsuranceFundSyncer and FundingRateEngine for each active pair.
+const pairIdMap = new Map<string, string>()
+try {
+  const onChainPairIds = await pairRegistry.read.getAllPairIds() as `0x${string}`[]
+  for (const pid of onChainPairIds) {
+    const pairRaw = await pairRegistry.read.pairs([pid]) as unknown as readonly [`0x${string}`, `0x${string}`, bigint, bigint, bigint, bigint, boolean]
+    const pair = { baseToken: pairRaw[0], quoteToken: pairRaw[1], active: pairRaw[6] }
+    // On-chain pairId matches OrderSettlement: keccak256(abi.encodePacked(base, quote))
+    const onChainId = keccak256(encodePacked(['address', 'address'], [pair.baseToken, pair.quoteToken]))
+    // Off-chain pairId format: "0xBASE/0xQUOTE"
+    const offChainId = `${pair.baseToken}/${pair.quoteToken}`
+    pairIdMap.set(onChainId.toLowerCase(), offChainId)
+
+    // Start funding rate engine for each active pair (G-5/fix)
+    if (pair.active) {
+      fundingEngine.startPair(
+        offChainId,
+        () => positionTracker.getAll().filter(p => p.pairId === offChainId),
+        () => markOracle.getMarkPrice(offChainId),
+        () => markOracle.getIndexPrice(offChainId),
+      )
+    }
+  }
+  console.log(`[Startup] Loaded ${pairIdMap.size} pair(s) from PairRegistry`)
+} catch (err) {
+  console.warn('[Startup] Could not load pairs from PairRegistry (contract not deployed yet?)', err)
+}
+
+// InsuranceFundSyncer: watches LiquidationFeeRouted on-chain → deposits to in-memory fund (G-9)
+const insuranceSyncer = new InsuranceFundSyncer(
+  publicClient,
+  config.orderSettlementAddress,
+  insuranceFund,
+  (id) => pairIdMap.get(id.toLowerCase()),
+)
+insuranceSyncer.on('synced', ({ pairId, amount }: { pairId: string; amount: bigint }) => {
+  console.log(`[InsuranceFund] Synced ${amount} for ${pairId}`)
+})
+insuranceSyncer.on('unknown', ({ onChainPairId }: { onChainPairId: string }) => {
+  console.warn(`[InsuranceFund] Unknown pairId: ${onChainPairId}`)
+})
+insuranceSyncer.on('error', (err: unknown) => {
+  console.error('[InsuranceFund] Syncer error:', err)
+})
+insuranceSyncer.start()
+
 // Check positions every 30 seconds
 const liquidationInterval = setInterval(() => {
   const positions = positionTracker.getAll()
@@ -132,6 +185,7 @@ server.listen({ port: config.port, host: config.host }, (err) => {
 process.on('SIGTERM', async () => {
   expiryWorker.stop()
   fundingEngine.stopAll()
+  insuranceSyncer.stop()
   clearInterval(liquidationInterval)
   watcher.stop()
   worker.stop()
