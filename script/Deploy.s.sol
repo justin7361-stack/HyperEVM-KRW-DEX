@@ -8,6 +8,8 @@ import "../src/OracleAdmin.sol";
 import "../src/BasicCompliance.sol";
 import "../src/FeeCollector.sol";
 import "../src/OrderSettlement.sol";
+import "../src/InsuranceFund.sol";
+import "../src/MarginRegistry.sol";
 import "../src/HybridPool.sol";
 import "../test/mocks/MockERC20.sol";
 
@@ -69,7 +71,21 @@ contract Deploy is Script {
         )));
         console.log("OrderSettlement:", address(settlement));
 
-        // 6. HybridPool KRW/USDC
+        // 6. InsuranceFund — operator = settlement so it can call deposit()
+        InsuranceFund insuranceFund = InsuranceFund(address(new ERC1967Proxy(
+            address(new InsuranceFund()),
+            abi.encodeCall(InsuranceFund.initialize, (admin, address(settlement), guardian))
+        )));
+        console.log("InsuranceFund:", address(insuranceFund));
+
+        // 7. MarginRegistry — operator = settlement so it can call updatePosition()
+        MarginRegistry marginRegistry = MarginRegistry(address(new ERC1967Proxy(
+            address(new MarginRegistry()),
+            abi.encodeCall(MarginRegistry.initialize, (admin, address(settlement)))
+        )));
+        console.log("MarginRegistry:", address(marginRegistry));
+
+        // 8. HybridPool KRW/USDC
         if (usdc != address(0)) {
             HybridPool poolUsdc = HybridPool(address(new ERC1967Proxy(
                 address(new HybridPool()),
@@ -84,7 +100,7 @@ contract Deploy is Script {
             console.log("HybridPool KRW/USDC:", address(poolUsdc));
         }
 
-        // 7. HybridPool KRW/USDT
+        // 9. HybridPool KRW/USDT
         if (usdt != address(0)) {
             HybridPool poolUsdt = HybridPool(address(new ERC1967Proxy(
                 address(new HybridPool()),

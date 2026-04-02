@@ -6,6 +6,7 @@ import "../src/PairRegistry.sol";
 import "../src/OracleAdmin.sol";
 import "../src/FeeCollector.sol";
 import "../src/OrderSettlement.sol";
+import "../src/InsuranceFund.sol";
 
 /// @notice Post-deploy configuration script. Run once after Deploy.s.sol.
 contract Config is Script {
@@ -16,6 +17,7 @@ contract Config is Script {
         address oracle        = vm.envAddress("ORACLE_ADMIN_ADDRESS");
         address feeCollector  = vm.envAddress("FEE_COLLECTOR_ADDRESS");
         address settlement    = vm.envAddress("ORDER_SETTLEMENT_ADDRESS");
+        address insuranceFund = vm.envAddress("INSURANCE_FUND_ADDRESS");
         address operator      = vm.envAddress("OPERATOR_ADDRESS");
         address usdc          = vm.envOr("USDC_ADDRESS", address(0));
 
@@ -45,6 +47,15 @@ contract Config is Script {
                 500       // maxDeltaBps = 5%
             );
         }
+
+        // Link InsuranceFund to OrderSettlement — liquidation fees (0.5%) routed to fund
+        OrderSettlement(settlement).setLiquidationFee(50);                          // 0.5%
+        OrderSettlement(settlement).setLiquidationInsuranceFund(insuranceFund);
+        console.log("LiquidationFee=50bps, InsuranceFund linked to OrderSettlement");
+
+        // Grant InsuranceFund DEPOSITOR_ROLE to settlement (if present on InsuranceFund)
+        // Note: InsuranceFund uses OPERATOR_ROLE (set to settlement at deploy time)
+        // so no additional role grant is needed here.
 
         vm.stopBroadcast();
 

@@ -115,5 +115,11 @@ contract PairRegistry is Initializable, AccessControlUpgradeable, UUPSUpgradeabl
         return p.active && t.whitelisted && !t.feeOnTransfer && !t.rebase;
     }
 
+    /// @notice Returns all registered pair IDs (active and inactive).
+    /// @dev Used by off-chain server at startup to build pairId resolver map.
+    function getAllPairIds() external view returns (bytes32[] memory) {
+        return pairIds;
+    }
+
     function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 }
