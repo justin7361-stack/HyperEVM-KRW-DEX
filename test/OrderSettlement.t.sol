@@ -101,15 +101,16 @@ contract OrderSettlementTest is Test {
         returns (OrderSettlement.Order memory)
     {
         return OrderSettlement.Order({
-            maker:      _maker,
-            taker:      address(0),
-            baseToken:  address(baseToken),
-            quoteToken: address(krwStable),
-            price:      PRICE,
-            amount:     AMOUNT,
-            isBuy:      isBuy,
-            nonce:      nonce,
-            expiry:     EXPIRY
+            maker:         _maker,
+            taker:         address(0),
+            baseToken:     address(baseToken),
+            quoteToken:    address(krwStable),
+            price:         PRICE,
+            amount:        AMOUNT,
+            isBuy:         isBuy,
+            nonce:         nonce,
+            expiry:        EXPIRY,
+            isLiquidation: false
         });
     }
 

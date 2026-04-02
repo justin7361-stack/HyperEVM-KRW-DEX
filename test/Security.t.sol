@@ -88,7 +88,8 @@ contract SecurityTest is Test {
             maker: who, taker: address(0),
             baseToken: address(baseToken), quoteToken: address(krwStable),
             price: 1000e18, amount: 1e18, isBuy: isBuy,
-            nonce: nonce, expiry: 9999999999
+            nonce: nonce, expiry: 9999999999,
+            isLiquidation: false
         });
     }
 

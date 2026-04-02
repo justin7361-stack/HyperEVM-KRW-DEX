@@ -10,7 +10,7 @@ contract SigUtils {
     bytes32 private immutable DOMAIN_SEPARATOR;
     bytes32 private constant ORDER_TYPEHASH = keccak256(
         "Order(address maker,address taker,address baseToken,address quoteToken,"
-        "uint256 price,uint256 amount,bool isBuy,uint256 nonce,uint256 expiry)"
+        "uint256 price,uint256 amount,bool isBuy,uint256 nonce,uint256 expiry,bool isLiquidation)"
     );
 
     constructor(bytes32 domainSeparator) {
@@ -25,7 +25,8 @@ contract SigUtils {
         bytes32 structHash = keccak256(abi.encode(
             ORDER_TYPEHASH,
             order.maker, order.taker, order.baseToken, order.quoteToken,
-            order.price, order.amount, order.isBuy, order.nonce, order.expiry
+            order.price, order.amount, order.isBuy, order.nonce, order.expiry,
+            order.isLiquidation
         ));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);

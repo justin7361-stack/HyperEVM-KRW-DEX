@@ -38,7 +38,7 @@ contract OrderSettlement is
 
     bytes32 private constant ORDER_TYPEHASH = keccak256(
         "Order(address maker,address taker,address baseToken,address quoteToken,"
-        "uint256 price,uint256 amount,bool isBuy,uint256 nonce,uint256 expiry)"
+        "uint256 price,uint256 amount,bool isBuy,uint256 nonce,uint256 expiry,bool isLiquidation)"
     );
 
     struct Order {
@@ -51,6 +51,7 @@ contract OrderSettlement is
         bool    isBuy;
         uint256 nonce;       // bitmap nonce
         uint256 expiry;      // unix timestamp
+        bool    isLiquidation; // true = liquidation order: fee-exempt, ±5% slippage cap enforced
     }
 
     /// @notice A single funding payment record — positive amount = maker receives, negative = maker pays
@@ -79,6 +80,8 @@ contract OrderSettlement is
     PairRegistry      public pairRegistry;
     FeeCollector      public feeCollector;
     uint256           public takerFeeBps;
+
+    event LiquidationSettled(address indexed maker, bytes32 indexed pairId, uint256 amount);
 
     event OrderFilled(
         bytes32 indexed orderHash,
@@ -163,6 +166,41 @@ contract OrderSettlement is
         }
     }
 
+    /// @notice Settle a single matched order pair with optional liquidation mark price.
+    /// @param makerOrder  Maker's signed order (isLiquidation=true enables fee exemption + slippage cap).
+    /// @param takerOrder  Taker's signed order.
+    /// @param makerSig    EIP-712 signature from maker.
+    /// @param takerSig    EIP-712 signature from taker.
+    /// @param markPrice   Current mark price (18 decimals). Must be >0 when isLiquidation=true.
+    function settleBatch(
+        Order calldata makerOrder,
+        Order calldata takerOrder,
+        bytes calldata makerSig,
+        bytes calldata takerSig,
+        uint256 markPrice
+    ) external onlyRole(OPERATOR_ROLE) nonReentrant whenNotPaused {
+        // Liquidation slippage cap: execution price must be within ±5% of markPrice
+        if (makerOrder.isLiquidation) {
+            require(markPrice > 0, "markPrice required for liquidation");
+            uint256 priceDelta = makerOrder.price > markPrice
+                ? makerOrder.price - markPrice
+                : markPrice - makerOrder.price;
+            require(priceDelta * 10_000 / markPrice <= 500, "liquidation slippage cap exceeded");
+        }
+
+        // Determine fill amount = full order amount (single-pair batch settles the full amount)
+        uint256 fillAmt = makerOrder.amount < takerOrder.amount
+            ? makerOrder.amount
+            : takerOrder.amount;
+
+        _settleLiquidation(makerOrder, takerOrder, fillAmt, makerSig, takerSig);
+
+        if (makerOrder.isLiquidation) {
+            bytes32 pairId = keccak256(abi.encodePacked(makerOrder.baseToken, makerOrder.quoteToken));
+            emit LiquidationSettled(makerOrder.maker, pairId, fillAmt);
+        }
+    }
+
     /// @notice Cancel a single order nonce.
     function cancelOrder(uint256 nonce) external {
         _useNonce(msg.sender, nonce);
@@ -212,6 +250,7 @@ contract OrderSettlement is
         // 1. Require entries.length > 0 and totalLoss > 0 (needed before reading entries[0])
         require(entries.length > 0, "ADL: no entries");
         require(totalLoss > 0,      "ADL: zero loss");
+        require(insuranceFund != address(0), "ADL: zero insuranceFund");
 
         // 2. Verify InsuranceFund balance is zero for this pairId + quoteToken
         address quoteToken = entries[0].quoteToken;
@@ -225,6 +264,10 @@ contract OrderSettlement is
         uint256 collected = 0;
         for (uint256 i = 0; i < entries.length; i++) {
             ADLEntry calldata entry = entries[i];
+            // NOTE: Intentionally use raw transferFrom (not SafeERC20.safeTransferFrom) here.
+            // safeTransferFrom reverts on failure, which would prevent the `if (ok)` bool-check
+            // branch from running and break the best-effort skip semantics. The catch{} block
+            // handles revert-style tokens; the if(!ok) branch handles bool-returning tokens.
             try IERC20(entry.quoteToken).transferFrom(entry.maker, address(this), entry.amount) returns (bool ok) {
                 if (ok) {
                     collected += entry.amount;
@@ -249,7 +292,8 @@ contract OrderSettlement is
         return _hashTypedDataV4(keccak256(abi.encode(
             ORDER_TYPEHASH,
             order.maker, order.taker, order.baseToken, order.quoteToken,
-            order.price, order.amount, order.isBuy, order.nonce, order.expiry
+            order.price, order.amount, order.isBuy, order.nonce, order.expiry,
+            order.isLiquidation
         )));
     }
 
@@ -286,6 +330,71 @@ contract OrderSettlement is
     // ─────────────────────────────────────────────
     //  Internal
     // ─────────────────────────────────────────────
+
+    /// @dev Settlement used by settleBatch(single-pair). Handles liquidation fee exemption.
+    function _settleLiquidation(
+        Order calldata makerOrder,
+        Order calldata takerOrder,
+        uint256        fillAmount,
+        bytes calldata makerSig,
+        bytes memory   takerSig
+    ) internal {
+        // ── Checks ──
+        require(fillAmount > 0,                                 "Zero fill");
+        require(block.timestamp < makerOrder.expiry,            "Maker expired");
+        require(block.timestamp < takerOrder.expiry,            "Taker expired");
+        require(makerOrder.isBuy != takerOrder.isBuy,           "Same direction");
+        require(makerOrder.baseToken  == takerOrder.baseToken,  "Base mismatch");
+        require(makerOrder.quoteToken == takerOrder.quoteToken, "Quote mismatch");
+
+        {
+            uint256 buyPrice  = makerOrder.isBuy ? makerOrder.price : takerOrder.price;
+            uint256 sellPrice = makerOrder.isBuy ? takerOrder.price : makerOrder.price;
+            require(buyPrice >= sellPrice, "Price mismatch");
+        }
+
+        require(
+            pairRegistry.isTradeAllowed(makerOrder.baseToken, makerOrder.quoteToken),
+            "Pair not active"
+        );
+
+        bytes32 makerHash = hashOrder(makerOrder);
+        bytes32 takerHash = hashOrder(takerOrder);
+
+        _verifySignature(makerOrder.maker, makerHash, makerSig);
+        if (takerSig.length > 0) {
+            _verifySignature(takerOrder.maker, takerHash, takerSig);
+        }
+
+        require(
+            makerOrder.taker == address(0) || makerOrder.taker == takerOrder.maker,
+            "Taker not allowed"
+        );
+
+        require(filledAmount[makerHash] + fillAmount <= makerOrder.amount, "Maker overfill");
+        require(filledAmount[takerHash] + fillAmount <= takerOrder.amount, "Taker overfill");
+
+        _checkCompliance(makerOrder.maker, takerOrder.maker, makerOrder.baseToken, fillAmount);
+
+        uint256 settlementPrice = makerOrder.isBuy ? takerOrder.price : makerOrder.price;
+        uint256 quoteAmount     = fillAmount * settlementPrice / 1e18;
+        // Fee is zero for liquidation orders
+        uint256 fee = makerOrder.isLiquidation ? 0 : (quoteAmount * takerFeeBps / 10_000);
+
+        // ── Effects ──
+        filledAmount[makerHash] += fillAmount;
+        filledAmount[takerHash] += fillAmount;
+
+        if (filledAmount[makerHash] == makerOrder.amount) _useNonce(makerOrder.maker, makerOrder.nonce);
+        if (filledAmount[takerHash] == takerOrder.amount) _useNonce(takerOrder.maker, takerOrder.nonce);
+
+        // ── Interactions ──
+        _executeTransfers(makerOrder, takerOrder, fillAmount, quoteAmount, fee);
+
+        compliance.onTradeSettled(makerOrder.maker, takerOrder.maker, makerOrder.baseToken, fillAmount);
+
+        emit OrderFilled(makerHash, makerOrder.maker, takerOrder.maker, makerOrder.baseToken, fillAmount, fee);
+    }
 
     /// @dev Best-effort single funding payment. Silently skips on failure.
     function _trySettleFunding(FundingPayment calldata payment, address reserve) internal {

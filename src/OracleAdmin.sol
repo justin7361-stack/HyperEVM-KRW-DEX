@@ -26,13 +26,20 @@ contract OracleAdmin is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     uint256 public constant TIMELOCK_DELAY = 2 hours;
 
+    struct MarkPrice {
+        uint256 price;       // 18 decimals
+        uint256 timestamp;
+    }
+
     mapping(address => Rate)        public rates;
     mapping(address => PendingRate) public pendingRates;
+    mapping(bytes32 => MarkPrice)   public markPrices;
 
     event RateProposed(address indexed token, uint256 price, uint256 effectiveAt);
     event RateApplied(address indexed token, uint256 price);
     event RateSetImmediate(address indexed token, uint256 price);
     event RateInitialized(address indexed token, uint256 price);
+    event MarkPricePosted(bytes32 indexed pairId, uint256 price, uint256 timestamp);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -115,6 +122,35 @@ contract OracleAdmin is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         require(r.price > 0, "Rate not initialized");
         require(block.timestamp - r.updatedAt <= r.maxStaleness, "Stale rate");
         return r.price;
+    }
+
+    /// @notice Post the current mark price for a trading pair.
+    /// @dev Called by the operator just before executing liquidations.
+    ///      Sanity check: price must be within ±20% of the last posted price (if any).
+    /// @param pairId  keccak256 of the pair string, e.g. keccak256("ETH/KRW").
+    /// @param price   Mark price (18 decimals).
+    function postMarkPrice(bytes32 pairId, uint256 price)
+        external onlyRole(OPERATOR_ROLE)
+    {
+        require(price > 0, "zero price");
+        MarkPrice storage mp = markPrices[pairId];
+        if (mp.price > 0) {
+            // Sanity check: new price must be within ±20% of last posted price
+            uint256 delta = price > mp.price ? price - mp.price : mp.price - price;
+            require(delta * 10_000 / mp.price <= 2_000, "price delta too large");
+        }
+        mp.price     = price;
+        mp.timestamp = block.timestamp;
+        emit MarkPricePosted(pairId, price, block.timestamp);
+    }
+
+    /// @notice Get the latest posted mark price for a pair.
+    /// @param pairId  Trading pair identifier.
+    /// @return price     Last posted mark price (18 decimals). 0 if never posted.
+    /// @return timestamp Block timestamp of last post. 0 if never posted.
+    function getMarkPrice(bytes32 pairId) external view returns (uint256 price, uint256 timestamp) {
+        MarkPrice memory mp = markPrices[pairId];
+        return (mp.price, mp.timestamp);
     }
 
     function _checkDelta(uint256 current, uint256 newPrice, uint256 maxDeltaBps) internal pure {
