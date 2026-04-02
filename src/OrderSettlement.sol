@@ -19,6 +19,12 @@ interface IInsuranceFund {
     function getBalance(bytes32 pairId, address token) external view returns (uint256);
 }
 
+/// @notice Minimal interface for depositing liquidation fees into InsuranceFund.
+/// @dev    OrderSettlement must hold OPERATOR_ROLE on the InsuranceFund contract.
+interface IInsuranceFundDeposit {
+    function deposit(bytes32 pairId, address token, uint256 amount) external;
+}
+
 /// @title OrderSettlement
 /// @notice CLOB DEX settlement contract. Operators submit matched maker/taker orders
 ///         with EIP-712 signatures. Bitmap nonces allow non-sequential cancel.
@@ -81,7 +87,20 @@ contract OrderSettlement is
     FeeCollector      public feeCollector;
     uint256           public takerFeeBps;
 
+    /// @notice Liquidation fee in basis points (e.g. 50 = 0.5%).
+    ///         Set to 0 to disable. When non-zero, fee is routed to liquidationInsuranceFund.
+    ///         Reference: Orderly 0.6~1.2%, dYdX v4 max 1.5%.
+    uint256 public liquidationFeeBps;
+
+    /// @notice InsuranceFund contract that receives liquidation fees.
+    ///         Must grant OPERATOR_ROLE to this contract on the InsuranceFund.
+    ///         address(0) = disabled (even if liquidationFeeBps > 0).
+    address public liquidationInsuranceFund;
+
     event LiquidationSettled(address indexed maker, bytes32 indexed pairId, uint256 amount);
+    event LiquidationFeeRouted(bytes32 indexed pairId, address indexed token, uint256 fee);
+    event LiquidationFeeUpdated(uint256 newFeeBps);
+    event LiquidationInsuranceFundUpdated(address newInsuranceFund);
 
     event OrderFilled(
         bytes32 indexed orderHash,
@@ -327,6 +346,21 @@ contract OrderSettlement is
         emit TakerFeeUpdated(newFeeBps);
     }
 
+    /// @notice Set the liquidation fee rate.
+    /// @param newFeeBps Basis points (e.g. 50 = 0.5%). Max 200 (2%).
+    function setLiquidationFee(uint256 newFeeBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(newFeeBps <= 200, "Liquidation fee too high");
+        liquidationFeeBps = newFeeBps;
+        emit LiquidationFeeUpdated(newFeeBps);
+    }
+
+    /// @notice Set the InsuranceFund that receives liquidation fees.
+    /// @dev    OrderSettlement must be granted OPERATOR_ROLE on the InsuranceFund contract.
+    function setLiquidationInsuranceFund(address newInsuranceFund) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        liquidationInsuranceFund = newInsuranceFund;
+        emit LiquidationInsuranceFundUpdated(newInsuranceFund);
+    }
+
     /// @notice GUARDIAN can pause; only ADMIN can unpause (deliberate asymmetry).
     function pause()   external onlyRole(GUARDIAN_ROLE)      { _pause(); }
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) { _unpause(); }
@@ -382,8 +416,23 @@ contract OrderSettlement is
 
         uint256 settlementPrice = makerOrder.isBuy ? takerOrder.price : makerOrder.price;
         uint256 quoteAmount     = fillAmount * settlementPrice / 1e18;
-        // Fee is zero for liquidation orders
-        uint256 fee = makerOrder.isLiquidation ? 0 : (quoteAmount * takerFeeBps / 10_000);
+
+        // Fee routing:
+        //   - Liquidation order: charge liquidationFeeBps, route to liquidationInsuranceFund (G-2/G-3)
+        //   - Regular order:     charge takerFeeBps,       route to FeeCollector
+        // Fee is zero if the respective bps is 0 (liquidationFeeBps defaults to 0 = disabled).
+        uint256 fee;
+        address feeReceiver; // address(0) = FeeCollector path; non-zero = InsuranceFund path
+        if (makerOrder.isLiquidation) {
+            // Charge fee only when BOTH feeBps > 0 AND insuranceFund is configured.
+            // If either is missing, fee = 0 (full quote passes to seller, not FeeCollector).
+            bool canRoute = liquidationFeeBps > 0 && liquidationInsuranceFund != address(0);
+            fee         = canRoute ? quoteAmount * liquidationFeeBps / 10_000 : 0;
+            feeReceiver = canRoute ? liquidationInsuranceFund : address(0);
+        } else {
+            fee         = quoteAmount * takerFeeBps / 10_000;
+            feeReceiver = address(0); // FeeCollector path
+        }
 
         // ── Effects ──
         filledAmount[makerHash] += fillAmount;
@@ -393,11 +442,17 @@ contract OrderSettlement is
         if (filledAmount[takerHash] == takerOrder.amount) _useNonce(takerOrder.maker, takerOrder.nonce);
 
         // ── Interactions ──
-        _executeTransfers(makerOrder, takerOrder, fillAmount, quoteAmount, fee);
+        _executeTransfers(makerOrder, takerOrder, fillAmount, quoteAmount, fee, feeReceiver);
 
         compliance.onTradeSettled(makerOrder.maker, takerOrder.maker, makerOrder.baseToken, fillAmount);
 
         emit OrderFilled(makerHash, makerOrder.maker, takerOrder.maker, makerOrder.baseToken, fillAmount, fee);
+
+        // Emit dedicated event when liquidation fee was deposited into InsuranceFund
+        if (makerOrder.isLiquidation && fee > 0 && feeReceiver != address(0)) {
+            bytes32 pairId = keccak256(abi.encodePacked(makerOrder.baseToken, makerOrder.quoteToken));
+            emit LiquidationFeeRouted(pairId, makerOrder.quoteToken, fee);
+        }
     }
 
     /// @dev Best-effort single funding payment. Silently skips on failure.
@@ -515,7 +570,8 @@ contract OrderSettlement is
         if (filledAmount[takerHash] == takerOrder.amount) _useNonce(takerOrder.maker, takerOrder.nonce);
 
         // ── Interactions ──
-        _executeTransfers(makerOrder, takerOrder, fillAmount, quoteAmount, fee);
+        // Regular orders always route fee to FeeCollector (feeReceiver=address(0))
+        _executeTransfers(makerOrder, takerOrder, fillAmount, quoteAmount, fee, address(0));
 
         compliance.onTradeSettled(makerOrder.maker, takerOrder.maker, makerOrder.baseToken, fillAmount);
 
@@ -534,12 +590,17 @@ contract OrderSettlement is
         require(takerOk, tr);
     }
 
+    /// @param feeReceiver address(0) = route fee to FeeCollector (regular orders).
+    ///                    Non-zero   = route fee to that address via IInsuranceFundDeposit.deposit()
+    ///                                 (liquidation orders → InsuranceFund). Requires that contract
+    ///                                 has granted OPERATOR_ROLE to this settlement contract.
     function _executeTransfers(
         Order calldata makerOrder,
         Order calldata takerOrder,
         uint256 fillAmount,
         uint256 quoteAmount,
-        uint256 fee
+        uint256 fee,
+        address feeReceiver
     ) internal {
         address buyer  = makerOrder.isBuy ? makerOrder.maker : takerOrder.maker;
         address seller = makerOrder.isBuy ? takerOrder.maker : makerOrder.maker;
@@ -549,8 +610,17 @@ contract OrderSettlement is
 
         if (fee > 0) {
             IERC20(makerOrder.quoteToken).safeTransferFrom(buyer, address(this), fee);
-            IERC20(makerOrder.quoteToken).forceApprove(address(feeCollector), fee);
-            feeCollector.depositFee(makerOrder.quoteToken, fee);
+            if (feeReceiver != address(0)) {
+                // Liquidation fee → InsuranceFund
+                // Requires: feeReceiver has granted OPERATOR_ROLE to address(this)
+                bytes32 pairId = keccak256(abi.encodePacked(makerOrder.baseToken, makerOrder.quoteToken));
+                IERC20(makerOrder.quoteToken).forceApprove(feeReceiver, fee);
+                IInsuranceFundDeposit(feeReceiver).deposit(pairId, makerOrder.quoteToken, fee);
+            } else {
+                // Regular fee → FeeCollector
+                IERC20(makerOrder.quoteToken).forceApprove(address(feeCollector), fee);
+                feeCollector.depositFee(makerOrder.quoteToken, fee);
+            }
         }
     }
 

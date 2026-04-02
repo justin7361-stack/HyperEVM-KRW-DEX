@@ -7,6 +7,7 @@ import "../src/OrderSettlement.sol";
 import "../src/PairRegistry.sol";
 import "../src/BasicCompliance.sol";
 import "../src/FeeCollector.sol";
+import "../src/InsuranceFund.sol";
 import "./mocks/MockERC20.sol";
 import "./helpers/SigUtils.sol";
 
@@ -16,6 +17,7 @@ contract OrderSettlementLiquidationTest is Test {
     PairRegistry    registry;
     BasicCompliance compliance;
     FeeCollector    feeCollector;
+    InsuranceFund   insuranceFund;
     SigUtils        sigUtils;
 
     MockERC20 baseToken;
@@ -64,6 +66,13 @@ contract OrderSettlementLiquidationTest is Test {
             abi.encodeCall(FeeCollector.initialize, (admin))
         )));
 
+        // Deploy InsuranceFund
+        InsuranceFund ifImpl = new InsuranceFund();
+        insuranceFund = InsuranceFund(address(new ERC1967Proxy(
+            address(ifImpl),
+            abi.encodeCall(InsuranceFund.initialize, (admin, operator, guardian))
+        )));
+
         // Deploy OrderSettlement
         OrderSettlement settleImpl = new OrderSettlement();
         settlement = OrderSettlement(address(new ERC1967Proxy(
@@ -78,11 +87,14 @@ contract OrderSettlementLiquidationTest is Test {
         )));
 
         // Setup roles and pair
-        bytes32 depositorRole = feeCollector.DEPOSITOR_ROLE();
+        bytes32 depositorRole   = feeCollector.DEPOSITOR_ROLE();
+        bytes32 ifOperatorRole  = insuranceFund.OPERATOR_ROLE();
         vm.startPrank(admin);
         registry.addToken(address(baseToken), false, false);
         registry.addPair(address(baseToken), address(krwStable), 1e14, 1e15, 1e17, 1_000_000e18);
         feeCollector.grantRole(depositorRole, address(settlement));
+        // Grant OrderSettlement OPERATOR_ROLE on InsuranceFund so it can deposit liquidation fees
+        insuranceFund.grantRole(ifOperatorRole, address(settlement));
         vm.stopPrank();
 
         // Fund accounts
@@ -286,5 +298,124 @@ contract OrderSettlementLiquidationTest is Test {
         settlement.settleLiquidation(makerOrder, takerOrder, makerSig, takerSig, MARK);
 
         assertEq(baseToken.balanceOf(maker), AMOUNT, "BASE transferred to maker");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  G-2 / G-3: Liquidation fee routed to InsuranceFund
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @dev Helper: configure liquidation fee and InsuranceFund on settlement contract.
+    function _enableLiquidationFee(uint256 feeBps) internal {
+        vm.startPrank(admin);
+        settlement.setLiquidationFee(feeBps);
+        settlement.setLiquidationInsuranceFund(address(insuranceFund));
+        vm.stopPrank();
+    }
+
+    function test_G2_liquidationFee_routedToInsuranceFund() public {
+        uint256 feeBps = 50;   // 0.5%
+        _enableLiquidationFee(feeBps);
+
+        OrderSettlement.Order memory makerOrder = _makeLiquidationOrder(maker, true,  0, true);
+        OrderSettlement.Order memory takerOrder = _makeLiquidationOrder(taker, false, 0, true);
+
+        bytes memory makerSig = sigUtils.sign(makerKey, makerOrder);
+        bytes memory takerSig = sigUtils.sign(takerKey, takerOrder);
+
+        uint256 ifBalBefore = insuranceFund.getBalance(
+            keccak256(abi.encodePacked(address(baseToken), address(krwStable))),
+            address(krwStable)
+        );
+        uint256 feeColBefore = feeCollector.accumulatedFees(address(krwStable));
+
+        vm.prank(operator);
+        settlement.settleLiquidation(makerOrder, takerOrder, makerSig, takerSig, MARK);
+
+        // quoteAmount = AMOUNT * PRICE / 1e18 = 1e18 * 1000e18 / 1e18 = 1000e18
+        uint256 quote       = _quoteAmount();
+        uint256 expectedFee = quote * feeBps / 10_000;
+
+        bytes32 pairId = keccak256(abi.encodePacked(address(baseToken), address(krwStable)));
+
+        // InsuranceFund received the liquidation fee
+        assertEq(
+            insuranceFund.getBalance(pairId, address(krwStable)) - ifBalBefore,
+            expectedFee,
+            "InsuranceFund balance increased by fee"
+        );
+        // FeeCollector NOT touched
+        assertEq(
+            feeCollector.accumulatedFees(address(krwStable)),
+            feeColBefore,
+            "FeeCollector unchanged"
+        );
+    }
+
+    function test_G2_liquidationFee_zero_when_feeBpsZero() public {
+        // Default: liquidationFeeBps = 0 → same as existing test_liquidation_feeExempt
+        OrderSettlement.Order memory makerOrder = _makeLiquidationOrder(maker, true,  0, true);
+        OrderSettlement.Order memory takerOrder = _makeLiquidationOrder(taker, false, 0, true);
+
+        bytes memory makerSig = sigUtils.sign(makerKey, makerOrder);
+        bytes memory takerSig = sigUtils.sign(takerKey, takerOrder);
+
+        bytes32 pairId = keccak256(abi.encodePacked(address(baseToken), address(krwStable)));
+        uint256 ifBalBefore = insuranceFund.getBalance(pairId, address(krwStable));
+
+        vm.prank(operator);
+        settlement.settleLiquidation(makerOrder, takerOrder, makerSig, takerSig, MARK);
+
+        // No fee when feeBps = 0
+        assertEq(insuranceFund.getBalance(pairId, address(krwStable)), ifBalBefore, "No fee when feeBps=0");
+    }
+
+    function test_G2_liquidationFee_zero_when_insuranceFundNotSet() public {
+        // Set feeBps but no insuranceFund address → fee is waived (not routed anywhere)
+        vm.prank(admin);
+        settlement.setLiquidationFee(50);
+        // liquidationInsuranceFund remains address(0)
+
+        OrderSettlement.Order memory makerOrder = _makeLiquidationOrder(maker, true,  0, true);
+        OrderSettlement.Order memory takerOrder = _makeLiquidationOrder(taker, false, 0, true);
+
+        bytes memory makerSig = sigUtils.sign(makerKey, makerOrder);
+        bytes memory takerSig = sigUtils.sign(takerKey, takerOrder);
+
+        uint256 takerKrwBefore = krwStable.balanceOf(taker);
+
+        vm.prank(operator);
+        // Should succeed — when insuranceFund not set, fee falls back to 0
+        settlement.settleLiquidation(makerOrder, takerOrder, makerSig, takerSig, MARK);
+
+        // Taker (seller) gets full quote — no fee deducted because insuranceFund=address(0)
+        assertEq(krwStable.balanceOf(taker), takerKrwBefore + _quoteAmount(), "Full quote to taker");
+    }
+
+    function test_G2_setLiquidationFee_adminOnly() public {
+        // Non-admin reverts
+        vm.prank(operator);
+        vm.expectRevert();
+        settlement.setLiquidationFee(50);
+
+        // Admin succeeds
+        vm.prank(admin);
+        settlement.setLiquidationFee(50);
+        assertEq(settlement.liquidationFeeBps(), 50);
+    }
+
+    function test_G2_setLiquidationFee_tooHigh_reverts() public {
+        vm.prank(admin);
+        vm.expectRevert("Liquidation fee too high");
+        settlement.setLiquidationFee(201);   // max is 200 (2%)
+    }
+
+    function test_G2_setLiquidationInsuranceFund_adminOnly() public {
+        vm.prank(operator);
+        vm.expectRevert();
+        settlement.setLiquidationInsuranceFund(address(insuranceFund));
+
+        vm.prank(admin);
+        settlement.setLiquidationInsuranceFund(address(insuranceFund));
+        assertEq(settlement.liquidationInsuranceFund(), address(insuranceFund));
     }
 }
