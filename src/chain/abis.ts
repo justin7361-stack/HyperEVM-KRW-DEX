@@ -77,6 +77,18 @@ export const ORDER_SETTLEMENT_ABI = [
       { name: 'nonce', type: 'uint256', indexed: false },
     ],
   },
+  {
+    // Emitted by OrderSettlement._executeTransfers when liquidationFeeBps > 0
+    // and liquidationInsuranceFund is set (G-2/G-3).
+    // pairId = keccak256(abi.encodePacked(baseToken, quoteToken))
+    name: 'LiquidationFeeRouted',
+    type: 'event',
+    inputs: [
+      { name: 'pairId', type: 'bytes32', indexed: true  },
+      { name: 'token',  type: 'address', indexed: false },
+      { name: 'amount', type: 'uint256', indexed: false },
+    ],
+  },
 ] as const
 
 export const PAIR_REGISTRY_ABI = [
