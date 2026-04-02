@@ -14,6 +14,11 @@ import "./interfaces/IComplianceModule.sol";
 import "./PairRegistry.sol";
 import "./FeeCollector.sol";
 
+/// @notice Minimal interface for querying InsuranceFund balance before ADL.
+interface IInsuranceFund {
+    function getBalance(bytes32 pairId, address token) external view returns (uint256);
+}
+
 /// @title OrderSettlement
 /// @notice CLOB DEX settlement contract. Operators submit matched maker/taker orders
 ///         with EIP-712 signatures. Bitmap nonces allow non-sequential cancel.
@@ -57,6 +62,14 @@ contract OrderSettlement is
         uint256 timestamp;
     }
 
+    /// @notice A single ADL entry — reduce a profitable trader's position to cover a loss.
+    struct ADLEntry {
+        address maker;       // trader to deleverage
+        bytes32 pairId;
+        address quoteToken;  // token to transfer
+        uint256 amount;      // amount to pull from maker (quoteToken, 18 decimals)
+    }
+
     /// @dev nonceBitmap[user][wordIndex] = bitmap of used nonces
     mapping(address => mapping(uint256 => uint256)) public nonceBitmap;
     /// @dev filledAmount[orderHash] = total base amount filled
@@ -79,6 +92,8 @@ contract OrderSettlement is
     event ComplianceUpdated(address indexed newModule);
     event TakerFeeUpdated(uint256 newFeeBps);
     event FundingSettled(address indexed maker, address indexed quoteToken, int256 amount, bytes32 pairId);
+    event ADLExecuted(address indexed maker, bytes32 indexed pairId, uint256 amount);
+    event ADLSkipped(address indexed maker, bytes32 indexed pairId);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -177,6 +192,53 @@ contract OrderSettlement is
         for (uint256 i = 0; i < payments.length; i++) {
             _trySettleFunding(payments[i], reserve);
         }
+    }
+
+    /// @notice Execute Auto-Deleveraging — transfer funds from profitable traders to cover losses
+    ///         when the InsuranceFund is exhausted.
+    /// @dev Operator must verify InsuranceFund is exhausted before calling.
+    ///      Each maker must have approved this contract to spend quoteToken.
+    ///      Emits ADLExecuted per entry. Best-effort: skips failed entries (try/catch).
+    /// @param entries       Array of ADL entries (makers to deleverage).
+    /// @param insuranceFund Address of the InsuranceFund contract to check balance.
+    /// @param pairId        Trading pair identifier.
+    /// @param totalLoss     Total loss amount that triggered ADL (must be > 0).
+    function settleADL(
+        ADLEntry[] calldata entries,
+        address insuranceFund,
+        bytes32 pairId,
+        uint256 totalLoss
+    ) external onlyRole(OPERATOR_ROLE) nonReentrant whenNotPaused {
+        // 1. Require entries.length > 0 and totalLoss > 0 (needed before reading entries[0])
+        require(entries.length > 0, "ADL: no entries");
+        require(totalLoss > 0,      "ADL: zero loss");
+
+        // 2. Verify InsuranceFund balance is zero for this pairId + quoteToken
+        address quoteToken = entries[0].quoteToken;
+        try IInsuranceFund(insuranceFund).getBalance(pairId, quoteToken) returns (uint256 bal) {
+            require(bal == 0, "InsuranceFund not exhausted");
+        } catch {
+            revert("InsuranceFund not exhausted");
+        }
+
+        // 3. Process each entry best-effort; accumulate collected amount
+        uint256 collected = 0;
+        for (uint256 i = 0; i < entries.length; i++) {
+            ADLEntry calldata entry = entries[i];
+            try IERC20(entry.quoteToken).transferFrom(entry.maker, address(this), entry.amount) returns (bool ok) {
+                if (ok) {
+                    collected += entry.amount;
+                    emit ADLExecuted(entry.maker, entry.pairId, entry.amount);
+                } else {
+                    emit ADLSkipped(entry.maker, entry.pairId);
+                }
+            } catch {
+                emit ADLSkipped(entry.maker, entry.pairId);
+            }
+        }
+
+        // 4. Require at least one entry succeeded
+        require(collected > 0, "ADL: no funds collected");
     }
 
     // ─────────────────────────────────────────────
