@@ -53,6 +53,40 @@ src/
 
 ---
 
+## 개발 철학 (Development Philosophy)
+
+### 오픈소스 우선 원칙 (Open Source First)
+
+**항상 상용화를 염두에 두고, 새 기능을 개발하기 전에 반드시 오픈소스를 먼저 비교 분석한다.**
+
+#### 의사결정 순서
+```
+1. 기능 요구사항 정의
+2. 동종 오픈소스 구현 조사 (dYdX v4, Hyperliquid, Orderly, Paradex 등)
+3. 포킹 vs. 직접 구현 판단:
+   ┌─ 포킹/참조 우선 조건:
+   │   - 검증된 알고리즘 (CLOB price-time priority, 펀딩 공식 등)
+   │   - 업계 표준 패턴 (주문 상태 머신, 청산 트리거 로직 등)
+   │   - KRW 특화 수정이 최소인 경우
+   └─ 직접 구현 조건:
+       - KRW 기반 구조로 전면 수정이 필요한 경우
+       - 오픈소스가 다른 언어라 변환 비용 > 직접 작성 비용 (예: dYdX Go → TS)
+       - HyperKRW 고유 기능 (STP 3-mode, bigint 재무 수학 등)
+4. 포킹/참조 시: docs/research.md 섹션 14.6에 출처 기록
+5. 직접 작성 시: research.md의 참조 구현과 비교 검증 후 차이 문서화
+```
+
+#### 주요 참조 오픈소스 (서버)
+| 컴포넌트 | 1차 참조 | 비고 |
+|---------|---------|------|
+| CLOB 매칭 알고리즘 | [dYdX v4 memclob](https://github.com/dydxprotocol/v4-chain/tree/main/protocol/x/clob/memclob) | Go→TS 변환, 알고리즘 동일 |
+| 마크 가격 공식 | [Orderly mark price](https://orderly.network/docs/build-on-omnichain/trade-data/mark-price) | P1/P2/median 구조 동일 |
+| 펀딩 레이트 공식 | [dYdX funding](https://docs.dydx.xyz/trading/funding) + [HL funding](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/funding) | 하이브리드 구현 |
+| 파셜 청산 20% | [Paradex liquidation](https://docs.paradex.trade/documentation/risk-management/liquidations) | 단계 수 차이 있음 |
+| STP 3-mode | [Paradex STP](https://docs.paradex.trade/) | 기본값 EXPIRE_TAKER |
+
+---
+
 ## Coding Standards
 
 ### TypeScript / Financial Math
