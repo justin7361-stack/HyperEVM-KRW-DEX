@@ -4,6 +4,24 @@ This is the **HyperKRW** project: a CLOB DEX built on HyperEVM (Hyperliquid L1) 
 
 ---
 
+## 세션 규칙 (Session Rules)
+
+### 세션 시작 시 반드시:
+1. `docs/tmr_todo.md` 읽기 — 현재 태스크, 우선순위, 설계 결정사항 파악
+2. `git log --oneline -10` 실행 — 최근 커밋 히스토리로 맥락 파악
+3. GitHub 레포 전체 진행사항 확인 후 현재 상태 파악하고 시작
+
+### 세션 종료 시 반드시:
+1. `docs/tmr_todo.md` 업데이트:
+   - 단순 할 일 목록이 아니라 **각 태스크의 설계 결정사항, 주의사항, 다음 세션에 알아야 할 것**까지 상세히 기록
+   - 완료된 태스크는 커밋 해시와 함께 기록
+   - 다음에 이어서 할 태스크 명확히 표시
+2. 작업 내용 GitHub에 커밋/푸시
+
+---
+
+---
+
 ## Project Overview
 
 - **Name:** HyperKRW
