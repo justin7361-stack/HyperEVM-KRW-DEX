@@ -10,7 +10,7 @@ import "../src/FeeCollector.sol";
 import "./mocks/MockERC20.sol";
 import "./helpers/SigUtils.sol";
 
-/// @notice Tests for the liquidation path in OrderSettlement.settleBatch(single-pair).
+/// @notice Tests for the liquidation path in OrderSettlement.settleLiquidation().
 contract OrderSettlementLiquidationTest is Test {
     OrderSettlement settlement;
     PairRegistry    registry;
@@ -139,7 +139,7 @@ contract OrderSettlementLiquidationTest is Test {
         uint256 feesBefore     = feeCollector.accumulatedFees(address(krwStable));
 
         vm.prank(operator);
-        settlement.settleBatch(makerOrder, takerOrder, makerSig, takerSig, MARK);
+        settlement.settleLiquidation(makerOrder, takerOrder, makerSig, takerSig, MARK);
 
         // No fee deducted: taker receives the full quoteAmount, feeCollector unchanged
         uint256 quote = _quoteAmount();
@@ -165,7 +165,7 @@ contract OrderSettlementLiquidationTest is Test {
         bytes memory takerSig = sigUtils.sign(takerKey, takerOrder);
 
         vm.prank(operator);
-        settlement.settleBatch(makerOrder, takerOrder, makerSig, takerSig, markPrice);
+        settlement.settleLiquidation(makerOrder, takerOrder, makerSig, takerSig, markPrice);
 
         // Just verify it doesn't revert; base tokens transferred
         assertEq(baseToken.balanceOf(maker), AMOUNT);
@@ -189,7 +189,7 @@ contract OrderSettlementLiquidationTest is Test {
 
         vm.prank(operator);
         vm.expectRevert("liquidation slippage cap exceeded");
-        settlement.settleBatch(makerOrder, takerOrder, makerSig, takerSig, markPrice);
+        settlement.settleLiquidation(makerOrder, takerOrder, makerSig, takerSig, markPrice);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -209,7 +209,7 @@ contract OrderSettlementLiquidationTest is Test {
         emit OrderSettlement.LiquidationSettled(maker, expectedPairId, AMOUNT);
 
         vm.prank(operator);
-        settlement.settleBatch(makerOrder, takerOrder, makerSig, takerSig, MARK);
+        settlement.settleLiquidation(makerOrder, takerOrder, makerSig, takerSig, MARK);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -225,7 +225,7 @@ contract OrderSettlementLiquidationTest is Test {
 
         vm.prank(operator);
         vm.expectRevert("markPrice required for liquidation");
-        settlement.settleBatch(makerOrder, takerOrder, makerSig, takerSig, 0);
+        settlement.settleLiquidation(makerOrder, takerOrder, makerSig, takerSig, 0);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -241,7 +241,7 @@ contract OrderSettlementLiquidationTest is Test {
 
         // markPrice=0 is fine for non-liquidation
         vm.prank(operator);
-        settlement.settleBatch(makerOrder, takerOrder, makerSig, takerSig, 0);
+        settlement.settleLiquidation(makerOrder, takerOrder, makerSig, takerSig, 0);
 
         assertEq(baseToken.balanceOf(maker), AMOUNT);
     }
@@ -260,7 +260,7 @@ contract OrderSettlementLiquidationTest is Test {
         uint256 feesBefore = feeCollector.accumulatedFees(address(krwStable));
 
         vm.prank(operator);
-        settlement.settleBatch(makerOrder, takerOrder, makerSig, takerSig, 0);
+        settlement.settleLiquidation(makerOrder, takerOrder, makerSig, takerSig, 0);
 
         uint256 quote          = _quoteAmount();
         uint256 expectedFee    = quote * FEE_BPS / 10_000;
@@ -283,7 +283,7 @@ contract OrderSettlementLiquidationTest is Test {
         // If the signature helper encodes isLiquidation correctly, this must not revert with
         // "Invalid maker signature". A successful settlement proves the sig round-trip is correct.
         vm.prank(operator);
-        settlement.settleBatch(makerOrder, takerOrder, makerSig, takerSig, MARK);
+        settlement.settleLiquidation(makerOrder, takerOrder, makerSig, takerSig, MARK);
 
         assertEq(baseToken.balanceOf(maker), AMOUNT, "BASE transferred to maker");
     }

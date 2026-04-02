@@ -151,6 +151,8 @@ contract OrderSettlement is
     }
 
     /// @notice Settle multiple maker orders against one taker order (batch).
+    /// @dev For liquidation orders use settleLiquidation() which enforces fee exemption
+    ///      and ±5% mark price slippage cap.
     function settleBatch(
         Order[]   calldata makerOrders,
         Order     calldata takerOrder,
@@ -166,13 +168,15 @@ contract OrderSettlement is
         }
     }
 
-    /// @notice Settle a single matched order pair with optional liquidation mark price.
+    /// @notice Settle a single liquidation order pair with fee exemption and ±5% slippage cap.
+    /// @dev markPrice must be > 0 when makerOrder.isLiquidation is true.
+    ///      For non-liquidation single-pair settlement, use the array-based settleBatch.
     /// @param makerOrder  Maker's signed order (isLiquidation=true enables fee exemption + slippage cap).
     /// @param takerOrder  Taker's signed order.
     /// @param makerSig    EIP-712 signature from maker.
     /// @param takerSig    EIP-712 signature from taker.
     /// @param markPrice   Current mark price (18 decimals). Must be >0 when isLiquidation=true.
-    function settleBatch(
+    function settleLiquidation(
         Order calldata makerOrder,
         Order calldata takerOrder,
         bytes calldata makerSig,
@@ -193,7 +197,7 @@ contract OrderSettlement is
             ? makerOrder.amount
             : takerOrder.amount;
 
-        _settleLiquidation(makerOrder, takerOrder, fillAmt, makerSig, takerSig);
+        _settleSinglePair(makerOrder, takerOrder, fillAmt, makerSig, takerSig);
 
         if (makerOrder.isLiquidation) {
             bytes32 pairId = keccak256(abi.encodePacked(makerOrder.baseToken, makerOrder.quoteToken));
@@ -331,8 +335,8 @@ contract OrderSettlement is
     //  Internal
     // ─────────────────────────────────────────────
 
-    /// @dev Settlement used by settleBatch(single-pair). Handles liquidation fee exemption.
-    function _settleLiquidation(
+    /// @dev Settlement used by settleLiquidation(). Handles liquidation fee exemption.
+    function _settleSinglePair(
         Order calldata makerOrder,
         Order calldata takerOrder,
         uint256        fillAmount,
