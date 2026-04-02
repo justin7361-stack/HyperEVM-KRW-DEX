@@ -1936,4 +1936,222 @@ Taker:  3 bps              — Orderly 기준
 
 ---
 
+## 14. HyperKRW 구현 현황 vs. 오픈소스 비교 분석
+
+**추가 작성:** 2026년 4월 2일
+**목적:** 현재까지 구현된 HyperKRW 코드를 동종 오픈소스 DEX와 기능별로 비교하고, 차이(Gap)를 명확히 정리
+
+---
+
+### 14.1 전체 기능 구현 현황 비교표
+
+| 기능 영역 | HyperKRW 현황 | dYdX v4 | Hyperliquid | Orderly | Paradex | 평가 |
+|---------|-------------|---------|-------------|---------|---------|------|
+| **오더북 (CLOB)** | ✅ Price-Time Priority, 인메모리 | ✅ (인메모리+온체인) | ✅ (온체인 BFT) | ✅ (오프체인) | ✅ (오프체인) | ✅ 동급 |
+| **Market Order** | ✅ IOC 방식 | ✅ | ✅ | ✅ | ✅ | ✅ 동급 |
+| **Limit Order (GTC)** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ 동급 |
+| **IOC / FOK** | ❌ 미구현 | ✅ | ✅(IOC만) | ✅ | ✅ | ⚠️ Phase 2 필요 |
+| **Post-Only** | ❌ 미구현 | ✅ | ✅ (ALO) | ✅ | ✅ | ⚠️ Phase 2 필요 |
+| **Reduce-Only** | ❌ 미구현 | ✅ | ✅ | ✅ | ✅ | ⚠️ Phase 2 필요 |
+| **Stop-Loss / Take-Profit** | ❌ 미구현 | ✅ | ✅ | ❌ (문서 없음) | ✅ | ⚠️ Phase 3 필요 |
+| **TWAP** | ❌ 미구현 | ✅ (v9.0+) | ✅ (30초) | ❌ | ✅ | ⚠️ Phase 3 필요 |
+| **STP (자기거래방지)** | ✅ EXPIRE_TAKER/MAKER/BOTH | ❌ (서브계정 수준) | ❌ (암묵적) | ❌ | ✅ (동일 3-mode) | ✅ **최상위 수준** |
+| **펀딩 레이트 (서버)** | ✅ 1시간 결제, ±600% 캡 | ✅ 1시간 | ✅ 1시간 | ✅ 8시간 | ✅ 연속 | ✅ 경쟁력 있음 |
+| **펀딩 결제 (온체인)** | ✅ `settleFunding()` | ✅ | ✅ | ✅ | ✅ | ✅ 동급 |
+| **마크 가격 (3-component)** | ✅ Median(P1, P2, MidPrice) | P=Oracle | ✅ 3-component | ✅ (Orderly 방식) | ✅ | ✅ **업계 표준 달성** |
+| **마크 가격 온체인 포스팅** | ✅ `postMarkPrice()` ±20% 가드 | ✅ | ✅ | ✅ | ✅ | ✅ 동급 |
+| **크로스 마진** | ✅ totalBalance 기준 | ✅ | ✅ | ✅ | ✅ | ✅ 동급 |
+| **아이솔레이티드 마진** | ✅ freeMargin 기준 | ❌ | ✅ | ❌ | ❌ | ✅ 경쟁 우위 |
+| **레버리지 강제** | ✅ `requiredMargin()` | ✅ | ✅ | ✅ | ✅ | ✅ 동급 |
+| **파셜 청산 (20%)** | ✅ 최대 5단계 | ❌ (전체 청산) | ✅ ($100k+) | ✅ | ✅ | ✅ 동급 |
+| **ADL** | ✅ `settleADL()`, InsuranceFund 잔액 0 확인 | ✅ | ✅ | ✅ | ✅ (Socialized Loss) | ✅ 동급 |
+| **보험 펀드 (인메모리)** | ✅ `IInsuranceFund` DI | - | - | - | - | ✅ 서버측 |
+| **보험 펀드 (온체인)** | ✅ `InsuranceFund.sol` pairId+token 2중 키 | ✅ | ✅ (HLP) | ✅ | ✅ | ✅ 동급 |
+| **청산 수수료** | ❌ 미정의 | ✅ 최대 1.5% | ✅ 0% (잔여마진 보존) | ✅ 0.6~1.2% | ✅ 70%MMR 연계 | ⚠️ 명시 필요 |
+| **EIP-712 서명 결제** | ✅ `OrderSettlement.sol` | ❌ (Cosmos 서명) | ❌ | ✅ | ✅ (StarkNet) | ✅ EVM 최상급 |
+| **Bitmap Nonce (재사용 방지)** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ 동급 |
+| **UUPS 업그레이더블** | ✅ 전 컨트랙트 | ❌ (Cosmos) | ❌ | ✅ | ✅ | ✅ 동급 |
+| **Compliance (블록리스트)** | ✅ `BasicCompliance.sol` | ✅ | ❌ | ✅ | ✅ | ✅ 동급 |
+| **Client Order ID 중복 방지** | ✅ open 상태 중복 409 반환 | ✅ (교체) | ✅ (128-bit hex) | ✅ | ✅ | ✅ 동급 |
+
+---
+
+### 14.2 영역별 심층 비교
+
+#### 14.2.1 펀딩 레이트 캡 — 명확화 필요
+
+현재 HyperKRW 서버의 `FundingRateEngine`:
+```
+MAX_RATE_SCALED = 6n * RATE_SCALE   // = ±600%
+```
+
+**문제점:** ±600%는 **8시간 기준** 캡인지, **시간당** 캡인지 명확하지 않음.
+
+| DEX | 캡 공식 | 기준 주기 |
+|-----|--------|---------|
+| dYdX v4 | `600% × (IMF - MMF)` | 8시간 |
+| Hyperliquid | ±4% | 1시간 |
+| Lighter | ±0.5% | 1시간 |
+| Paradex | ±5% | 8시간 |
+| Vertex | ±10% | 1일 |
+| **HyperKRW** | ±600% | **불명확** |
+
+**권장 조치:**
+- BTC/ETH 기준 IMF=5%, MMF=2.5% 적용 시 `dYdX 방식 캡 = 600% × 2.5% = 15%/8h`
+- 또는 `Hyperliquid 방식 = ±4%/h`로 변경
+- **현재 ±600%는 사실상 캡 없는 것과 동일** — 수정 권장
+
+#### 14.2.2 마크 가격 — 업계 최상급 구현
+
+HyperKRW의 현재 구현:
+```typescript
+// MarkPriceOracle.ts
+P1 = indexPrice + indexPrice * rateScaled * timeScaled / (RATE_SCALE * RATE_SCALE)
+P2 = indexPrice + movingAvgBasis
+midPrice = median(bestBid, bestAsk, lastPrice)
+markPrice = median(P1, P2, midPrice)
+```
+
+Orderly Network 공식 참조 구현과 **구조적으로 동일**. dYdX v4(오라클 가격만 사용)보다 정교.
+
+**강점:**
+- bigint 전용 연산 → 부동소수점 오차 없음
+- 분자를 먼저 곱한 후 나눔 → 정밀도 손실 최소화
+
+**추가 권장 사항:** 인덱스 가격 소스를 단일 소스에서 국내 거래소 멀티소스로 확장 (섹션 13.4 참조)
+
+#### 14.2.3 청산 엔진 — 파셜 청산 경쟁력 있음
+
+| 항목 | HyperKRW | dYdX v4 | Hyperliquid | Orderly |
+|------|---------|---------|-------------|---------|
+| 파셜 청산 | ✅ 20% × 5단계 | ❌ 전체 청산 | ✅ ($100k 이상) | ✅ IMR 복구까지 |
+| 청산 수수료 | ❌ **미정의** | 최대 1.5% | 0% (잔여마진) | 0.6~1.2% |
+| ADL 순위 기준 | ❌ **미정의** | PnL/마진율 기준 | 비공개 | AMR 기반 |
+| 청산 이벤트 로깅 | ✅ `LiquidationSettled` | ✅ | ✅ | ✅ |
+
+**중요 미비 사항:**
+1. **청산 수수료** — 얼마를 보험 펀드/청산자에게 분배할지 정의 없음
+2. **ADL 대상 선정 순위** — Hyperliquid은 "고레버리지 고수익 포지션" 기준, dYdX는 PnL/마진율 기준. HyperKRW `settleADL()`은 호출자가 entries 배열을 제공하므로 순위 정책이 서버 측 비즈니스 로직에 있어야 함 — 미문서화
+
+#### 14.2.4 온체인 결제 아키텍처 — EVM 최고 수준
+
+| 항목 | HyperKRW | Orderly | Vertex | Paradex |
+|------|---------|---------|--------|---------|
+| 서명 방식 | EIP-712 타입드 해시 | EIP-712 | EIP-712 | StarkNet 서명 |
+| Nonce | Bitmap (비트맵) | 시퀀셜 | 시퀀셜 | 시퀀셜 |
+| 업그레이드 | UUPS 프록시 | ✅ | 일부 | ✅ |
+| 배치 결제 | ✅ `settleBatch()` | ✅ | ✅ | ✅ |
+| 청산 결제 | ✅ `settleLiquidation()` | ✅ | ✅ | ✅ |
+| ADL 결제 | ✅ `settleADL()` | ✅ | 미기재 | ✅ |
+| 펀딩 결제 | ✅ `settleFunding()` | ✅ | ✅ | ✅ |
+
+**강점:** Bitmap nonce는 dYdX v4 방식으로 주문 취소 없이 비트만 플립 → 가스 효율 우수
+
+#### 14.2.5 보험 펀드 설계 비교
+
+| 항목 | HyperKRW | Hyperliquid HLP | dYdX v4 | Orderly |
+|------|---------|----------------|---------|---------|
+| 구조 | `InsuranceFund.sol` (온체인) + 인메모리 | HLP Vault (커뮤니티 운용) | 별도 모듈 | 프로토콜 소유 |
+| 자금 원천 | 청산 수수료 (미정의) | 플랫폼 수익 + LP | 펀딩 수수료 일부 | 청산 수수료 50% |
+| 권한 구조 | OPERATOR_ROLE | DAO | 거버넌스 | 프로토콜 |
+| ADL 연동 | ✅ `balance==0` 확인 후 ADL | ✅ | ✅ | ✅ |
+
+**현재 HyperKRW 이슈:**
+- 보험 펀드 충전 메커니즘 미정의 — 청산 수수료 → 보험 펀드 자동 적립 로직 없음
+- 인메모리(서버) 보험 펀드와 온체인 `InsuranceFund.sol` 간 동기화 메커니즘 없음
+
+---
+
+### 14.3 HyperKRW vs. 피어 — Gap 분석 요약
+
+#### 🔴 Critical Gaps (MVP 출시 전 해결 필요)
+
+| #  | 항목 | 현황 | 권장 조치 |
+|----|------|------|---------|
+| G-1 | **펀딩 레이트 캡 재정의** | `±600%` 모호 | `±4%/h` 또는 `±15%/8h` 명확화 |
+| G-2 | **청산 수수료 미정의** | 없음 | `OrderSettlement.sol`에 fee bps 파라미터 추가 |
+| G-3 | **보험 펀드 자동 충전** | 없음 | 청산 수수료 일부 → InsuranceFund 자동 이체 로직 |
+| G-4 | **ADL 대상 순위 정책** | 미문서화 | 서버 `settleADL` 호출 시 순위 알고리즘 명세 |
+
+#### 🟡 High Priority Gaps (테스트넷 이후 구현)
+
+| #  | 항목 | 현황 | 권장 조치 |
+|----|------|------|---------|
+| G-5 | **IOC/FOK 주문** | 미구현 | `MatchingEngine.ts`에 TIF 옵션 추가 |
+| G-6 | **Post-Only 주문** | 미구현 | 매칭 전 즉시 체결 여부 사전 검증 |
+| G-7 | **Reduce-Only 플래그** | 미구현 | `Order` 타입에 `reduceOnly: boolean` 추가 |
+| G-8 | **Stop-Loss / Take-Profit** | 미구현 | 조건부 주문 엔진 설계 필요 |
+| G-9 | **인메모리↔온체인 InsuranceFund 동기화** | 없음 | 블록 이벤트 구독으로 온체인 → 인메모리 반영 |
+
+#### 🟢 Low Priority Gaps (Phase 3 이후)
+
+| #  | 항목 | 현황 | 권장 조치 |
+|----|------|------|---------|
+| G-10 | **TWAP 주문** | 미구현 | 30초 슬라이스 실행 엔진 |
+| G-11 | **KRW 멀티소스 오라클** | 단일 소스 | Upbit+Bithumb+Binance×환율 가중 평균 |
+| G-12 | **서브계정** | 없음 | 계정당 최대 20개 서브계정 |
+| G-13 | **포트폴리오 마진** | 없음 | Paradex/Vertex 방식 상관관계 마진 |
+
+---
+
+### 14.4 HyperKRW 고유 강점 (vs. 모든 피어)
+
+1. **3-mode STP**: EXPIRE_TAKER/MAKER/BOTH — dYdX, Hyperliquid, Orderly 모두 미지원. Paradex만 동일 수준
+2. **Isolated Margin 지원**: Orderly, Paradex, dYdX v4는 Cross만. Hyperliquid만 동일 지원
+3. **bigint 전용 재무 수학**: JavaScript 서버에서 Number 사용 금지 — CEX 수준 정밀도
+4. **EIP-712 + Bitmap Nonce**: 재사용 방지와 가스 효율의 최적 조합
+5. **KRW 기반**: 김치 프리미엄을 인덱스 가격에 자연 반영 가능한 유일한 구조
+
+---
+
+### 14.5 구체적 개선 우선순위 (다음 세션 참고)
+
+#### Phase 2A — 테스트넷 전 (Critical)
+```
+1. G-1: FundingRateEngine MAX_RATE_SCALED 재정의
+   - 현행: 6n * RATE_SCALE (±600%)
+   - 변경안: 4n * RATE_SCALE / 100n (±4%/h = Hyperliquid 수준) 검토
+   - 또는: dYdX 방식 600% × (IMF-MMF) 동적 계산
+
+2. G-2: settleLiquidation()에 청산 수수료 추가
+   - 파라미터: uint256 liquidationFeeBps (예: 50 = 0.5%)
+   - 수수료 분배: 60% → 보험펀드, 40% → 프로토콜
+
+3. G-3: InsuranceFund 자동 충전
+   - settleLiquidation() 완료 시 fee → InsuranceFund.deposit() 호출
+```
+
+#### Phase 2B — 테스트넷 직후
+```
+4. G-5~G-7: IOC/FOK/Post-Only/Reduce-Only
+   - Order 타입에 TimeInForce enum 추가
+   - MatchingEngine 로직 분기 추가
+
+5. G-8: 조건부 주문 (Stop-Loss/Take-Profit)
+   - TriggerOrderEngine 신규 모듈
+   - postMarkPrice() 업데이트 시 조건 확인
+```
+
+---
+
+### 14.6 오픈소스 코드 참조 포인트
+
+현재 HyperKRW 구현과 가장 유사한 오픈소스 참조점:
+
+| HyperKRW 컴포넌트 | 참조 소스 | 유사도 |
+|----------------|---------|--------|
+| `MatchingEngine.ts` | [dYdX v4 memclob](https://github.com/dydxprotocol/v4-chain/tree/main/protocol/x/clob/memclob) | 알고리즘 동일 (언어 다름) |
+| `MarkPriceOracle.ts` | [Orderly Network mark price](https://orderly.network/docs/build-on-omnichain/trade-data/mark-price) | 공식 동일 |
+| `FundingRateEngine.ts` | [dYdX v4 funding](https://docs.dydx.xyz/trading/funding) + [Hyperliquid funding](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/funding) | 하이브리드 |
+| `LiquidationEngine.ts` | [Paradex partial liquidation](https://docs.paradex.trade/documentation/risk-management/liquidations) | 20% 단계 동일 |
+| `OrderSettlement.sol` | [Orderly EVM contracts](https://github.com/OrderlyNetwork/contract-evm) | EIP-712 구조 유사 |
+| `InsuranceFund.sol` | [dYdX v4 insurance](https://github.com/dydxprotocol/v4-chain/tree/main/protocol/x/insurancefund) | pairId 분리 구조 차별화 |
+| `MarginRegistry.sol` | [Hyperliquid margin](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/margin) | 개념 동일, 구현 독자적 |
+
+---
+
+*섹션 14 추가 작성: 2026년 4월 2일. HyperKRW C-1~C-6 컨트랙트 완료 후 현황 기준.*
+
+---
+
 *이 문서는 2026년 3월 31일 기준으로 각 DEX의 공개 문서, GitHub 레포지토리, 공식 API 문서를 기반으로 작성되었습니다. 각 프로토콜은 지속적으로 업데이트되므로, 구체적인 구현 전에 최신 공식 문서를 반드시 확인하세요.*
