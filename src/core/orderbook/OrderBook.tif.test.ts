@@ -52,6 +52,51 @@ describe('FOK', () => {
   })
 })
 
+describe('IOC (Immediate Or Cancel)', () => {
+  let store: MemoryOrderBookStore
+  let book: OrderBook
+  beforeEach(() => { store = new MemoryOrderBookStore(); book = new OrderBook(store, PAIR) })
+
+  it('IOC: full fill when liquidity equals order size', async () => {
+    await store.addOrder(makeOrder({ id: 's1', isBuy: false, price: 100n, amount: 10n, nonce: 10n, maker: MAKER_B }))
+    const matches = await book.submit(
+      makeOrder({ id: 'b1', isBuy: true, price: 100n, amount: 10n, timeInForce: 'IOC', nonce: 2n, maker: MAKER_A })
+    )
+    expect(matches).toHaveLength(1)
+    expect(matches[0].fillAmount).toBe(10n)
+    expect((await store.getOrder('b1'))?.status).toBe('filled')
+  })
+
+  it('IOC: partial fill — matches what is available, cancels unfilled remainder', async () => {
+    // Only 6 available, order is for 10 → partial fill of 6, remainder cancelled
+    await store.addOrder(makeOrder({ id: 's1', isBuy: false, price: 100n, amount: 6n, nonce: 10n, maker: MAKER_B }))
+    const matches = await book.submit(
+      makeOrder({ id: 'b1', isBuy: true, price: 100n, amount: 10n, timeInForce: 'IOC', nonce: 2n, maker: MAKER_A })
+    )
+    expect(matches).toHaveLength(1)
+    expect(matches[0].fillAmount).toBe(6n)
+    expect((await store.getOrder('b1'))?.status).toBe('cancelled')
+  })
+
+  it('IOC: no matching liquidity → cancelled immediately with no fills', async () => {
+    const matches = await book.submit(
+      makeOrder({ id: 'b1', isBuy: true, price: 100n, amount: 10n, timeInForce: 'IOC', nonce: 2n, maker: MAKER_A })
+    )
+    expect(matches).toHaveLength(0)
+    expect((await store.getOrder('b1'))?.status).toBe('cancelled')
+  })
+
+  it('IOC: does NOT rest in book (cancelled even if price is better than market)', async () => {
+    // No asks exist — IOC buy at very high price should still be cancelled
+    const matches = await book.submit(
+      makeOrder({ id: 'b1', isBuy: true, price: 999n, amount: 10n, timeInForce: 'IOC', nonce: 2n, maker: MAKER_A })
+    )
+    expect(matches).toHaveLength(0)
+    const order = await store.getOrder('b1')
+    expect(order?.status).toBe('cancelled')
+  })
+})
+
 describe('Post-Only', () => {
   let store: MemoryOrderBookStore
   let book: OrderBook

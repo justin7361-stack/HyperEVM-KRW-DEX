@@ -4,9 +4,17 @@ import type { IOrderBookStore } from '../orderbook/IOrderBookStore.js'
 import { OrderBook } from '../orderbook/OrderBook.js'
 import type { FeeEngine } from '../fees/FeeEngine.js'
 
+/**
+ * Narrow interface for reduce-only position checks.
+ * `PositionTracker` satisfies this interface directly.
+ */
+export interface IPositionReader {
+  canReduceOnly(maker: string, pairId: string, isBuy: boolean, amount: bigint): boolean
+}
+
 // Events emitted:
 //   'matched'  (result: MatchResult)    — one per fill
-//   'rejected' (orderId, reason)        — pair not active / pre-check fail
+//   'rejected' (orderId, reason)        — pair not active / pre-check fail / reduce-only violation
 //   'price'    (pairId, price: bigint)  — last execution price after each fill
 export class MatchingEngine extends EventEmitter {
   private readonly orderbooks = new Map<string, OrderBook>()
@@ -14,6 +22,7 @@ export class MatchingEngine extends EventEmitter {
   constructor(
     private readonly store: IOrderBookStore,
     private readonly feeEngine?: FeeEngine,
+    private readonly positionReader?: IPositionReader,
   ) {
     super()
   }
@@ -32,6 +41,21 @@ export class MatchingEngine extends EventEmitter {
       this.emit('rejected', order.id, 'Server paused')
       return
     }
+
+    // Reduce-Only enforcement (G-7):
+    //   sell reduce-only → requires long position >= order.amount
+    //   buy  reduce-only → requires short position with abs >= order.amount
+    if (order.reduceOnly) {
+      if (!this.positionReader) {
+        this.emit('rejected', order.id, 'reduce-only: no position reader configured')
+        return
+      }
+      if (!this.positionReader.canReduceOnly(order.maker, pairId, order.isBuy, order.amount)) {
+        this.emit('rejected', order.id, 'reduce-only: no qualifying open position')
+        return
+      }
+    }
+
     const book = this.getOrCreateBook(pairId)
     const matches = await book.submit(order)
     for (let match of matches) {
