@@ -124,7 +124,20 @@ Phase 6 — 프로덕션 강화
 "tmr_todo.md 참고해서 D-1 테스트넷 배포 작업 시작해줘"
 ```
 
-**단, D-1 전 Critical Gap 해결 권장 (research.md 섹션 14.3 참고):**
-- G-1: 펀딩 레이트 캡 재정의 (±600% → ±4%/h 또는 ±15%/8h)
-- G-2: settleLiquidation() 청산 수수료 추가
-- G-3: InsuranceFund 자동 충전 메커니즘
+**G-1~G-9 모두 완료 (2026-04-02)**:
+- G-1: 펀딩 레이트 캡 ±4%/h → 서버 `5d8dbae`
+- G-2/G-3: `settleLiquidation()` 수수료 + InsuranceFund 자동 충전 → 컨트랙트 `77c2289`
+- G-4: ADL 대상 순위 (effectiveLeverage) → 서버 `7250879`
+- G-5~G-7: IOC/FOK/POST_ONLY/Reduce-Only → 서버 `8092546`
+- G-8: SL/TP 조건부 주문 엔진 (expiry, events) → 서버 `602d85f`
+- G-9: InsuranceFundSyncer (온체인↔인메모리 동기화) → 서버 `aaeb688`
+
+**이제 D-1 테스트넷 배포 진행 가능.**
+
+### 배포 준비 체크리스트
+- [ ] `script/Deploy.s.sol` 작성
+- [ ] HyperEVM testnet RPC + PRIVATE_KEY 설정
+- [ ] InsuranceFund OPERATOR_ROLE → OrderSettlement 부여
+- [ ] 서버 환경변수 업데이트 (컨트랙트 주소들)
+- [ ] InsuranceFundSyncer PairIdResolver 초기화 (keccak256 → pairString 매핑)
+- [ ] MatchingEngine에 PositionTracker 주입 (index.ts wiring)
