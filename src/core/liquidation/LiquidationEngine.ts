@@ -11,6 +11,30 @@ export interface LiquidationEvent {
   reason:    string
 }
 
+/**
+ * A single ADL candidate entry, ready for submission to on-chain settleADL().
+ * Ranked by ADL score; lower index = higher priority (deleveraged first).
+ *
+ * ADL ranking algorithm (G-4):
+ *   Score = effectiveLeverage = abs(size) × markPrice / 1e18 / margin
+ *   Higher leverage → selected first.
+ *   Reference:
+ *     Hyperliquid — "고레버리지 고수익 포지션 우선" (high-leverage high-profit)
+ *     dYdX v4    — ranked by unrealizedPnL% / margin ratio
+ *   Without entry price, effectiveLeverage is the best available proxy.
+ *
+ * ADL direction rule:
+ *   If the losing liquidated position was LONG  → select SHORT  candidates (they are profitable)
+ *   If the losing liquidated position was SHORT → select LONG   candidates
+ */
+export interface ADLCandidate {
+  maker:      string   // trader address
+  pairId:     string
+  quoteToken: string   // address of quoteToken (KRW stablecoin)
+  amount:     bigint   // quoteToken amount to pull from this trader (≤ their margin)
+  score:      bigint   // effectiveLeverage × SCALE; higher = higher priority
+}
+
 type SubmitFn = (order: StoredOrder, pairId: string) => Promise<void>
 
 // Events: 'liquidation' (event: LiquidationEvent)
@@ -69,6 +93,88 @@ export class LiquidationEngine extends EventEmitter {
   resetSteps(maker: string, pairId: string): void {
     const posKey = `${maker}:${pairId}`
     this.liquidationSteps.delete(posKey)
+  }
+
+  /**
+   * Select and rank ADL candidates when InsuranceFund is exhausted.
+   *
+   * Algorithm (G-4 — reference: Hyperliquid + dYdX v4):
+   *   1. Filter positions for the given pairId that are on the OPPOSITE side
+   *      from the losing liquidated position (they are the profitable counterparties).
+   *   2. Score each candidate by effective leverage = abs(size) × markPrice / 1e18 / margin.
+   *      (Proxy for "most leveraged = most profit relative to margin = fairest to deleverage first".)
+   *   3. Sort descending by score (highest leverage = first ADL target).
+   *   4. Accumulate candidates until their margin sum covers totalLoss.
+   *   5. Each candidate's amount = min(pos.margin, remaining_loss_needed).
+   *
+   * @param positions       All open positions across all pairs.
+   * @param pairId          Trading pair in distress.
+   * @param quoteToken      Quote token address (for ADLEntry.quoteToken).
+   * @param lossDirection   Direction of the LOSING position ('long'|'short').
+   *                        ADL targets are the opposite direction.
+   * @param totalLoss       Total quoteToken amount needed to cover the loss.
+   * @param markPrice       Current mark price for the pair (18 decimals).
+   * @returns               Ranked ADLCandidate[], highest priority first.
+   *                        Empty if no eligible candidates.
+   */
+  selectADLTargets(
+    positions:     MarginPosition[],
+    pairId:        string,
+    quoteToken:    string,
+    lossDirection: 'long' | 'short',
+    totalLoss:     bigint,
+    markPrice:     bigint,
+  ): ADLCandidate[] {
+    if (totalLoss <= 0n || markPrice === 0n) return []
+
+    const SCALE = 10n ** 18n
+
+    // Step 1: filter to opposite-side, non-zero positions for this pairId with margin > 0
+    // "long" loser → select "short" candidates (size < 0), and vice versa
+    const targetSide = lossDirection === 'long' ? 'short' : 'long'
+    const eligible = positions.filter(pos => {
+      if (pos.pairId !== pairId) return false
+      if (pos.size === 0n)       return false
+      if (pos.margin <= 0n)      return false
+      const isShort = pos.size < 0n
+      return targetSide === 'short' ? isShort : !isShort
+    })
+
+    if (eligible.length === 0) return []
+
+    // Step 2: compute score = effectiveLeverage × SCALE = absSize × markPrice / margin
+    // (scaled to avoid integer truncation losses when margin >> notional)
+    const scored = eligible.map(pos => {
+      const absSize = pos.size < 0n ? -pos.size : pos.size
+      const notional = absSize * markPrice / SCALE   // baseToken units → quoteToken-scaled
+      // effectiveLeverage = notional / margin (both in quoteToken units)
+      // Multiply first to preserve precision: score = notional * SCALE / margin
+      const score = pos.margin > 0n ? notional * SCALE / pos.margin : 0n
+      return { pos, score }
+    })
+
+    // Step 3: sort descending by score (highest leverage first)
+    scored.sort((a, b) => (a.score > b.score ? -1 : a.score < b.score ? 1 : 0))
+
+    // Step 4 & 5: accumulate until totalLoss is covered
+    const candidates: ADLCandidate[] = []
+    let remaining = totalLoss
+
+    for (const { pos, score } of scored) {
+      if (remaining <= 0n) break
+      // Each candidate contributes at most their full margin
+      const amount = pos.margin < remaining ? pos.margin : remaining
+      candidates.push({
+        maker:      pos.maker,
+        pairId:     pos.pairId,
+        quoteToken,
+        amount,
+        score,
+      })
+      remaining -= amount
+    }
+
+    return candidates
   }
 
   /**

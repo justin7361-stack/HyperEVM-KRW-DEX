@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { LiquidationEngine, type LiquidationEvent } from './LiquidationEngine.js'
+import { LiquidationEngine, type LiquidationEvent, type ADLCandidate } from './LiquidationEngine.js'
 import { MarkPriceOracle } from '../oracle/MarkPriceOracle.js'
 import type { MarginPosition, StoredOrder } from '../../types/order.js'
 
@@ -196,5 +196,143 @@ describe('LiquidationEngine', () => {
     }
 
     expect(submitFn).toHaveBeenCalledTimes(7)
+  })
+})
+
+// ── selectADLTargets ──────────────────────────────────────────────────────────
+
+describe('LiquidationEngine.selectADLTargets (G-4)', () => {
+  const MARK = 1000n * 10n ** 18n   // 1 ETH = 1000 KRW
+  const QUOTE = '0xKRW' as `0x${string}`
+
+  function engine() {
+    const oracle = makeOracle(MARK)
+    return new LiquidationEngine(oracle, vi.fn())
+  }
+
+  function makePos(overrides: Partial<MarginPosition> = {}): MarginPosition {
+    return {
+      maker:  '0xAABB' as `0x${string}`,
+      pairId: PAIR,
+      size:   1n * 10n ** 18n,
+      margin: 100n * 10n ** 18n,
+      mode:   'isolated',
+      ...overrides,
+    }
+  }
+
+  it('returns empty when no opposite-side positions exist', () => {
+    const eng = engine()
+    // All positions are LONG; loser is also long → no SHORT candidates
+    const positions = [
+      makePos({ maker: '0xA1' as `0x${string}`, size:  1n * 10n ** 18n }),
+      makePos({ maker: '0xA2' as `0x${string}`, size:  2n * 10n ** 18n }),
+    ]
+    const result = eng.selectADLTargets(positions, PAIR, QUOTE, 'long', 500n, MARK)
+    expect(result).toHaveLength(0)
+  })
+
+  it('returns empty when totalLoss is 0', () => {
+    const eng = engine()
+    const positions = [makePos({ size: -(1n * 10n ** 18n) })]
+    const result = eng.selectADLTargets(positions, PAIR, QUOTE, 'long', 0n, MARK)
+    expect(result).toHaveLength(0)
+  })
+
+  it('returns empty when markPrice is 0', () => {
+    const eng = engine()
+    const positions = [makePos({ size: -(1n * 10n ** 18n) })]
+    const result = eng.selectADLTargets(positions, PAIR, QUOTE, 'long', 500n, 0n)
+    expect(result).toHaveLength(0)
+  })
+
+  it('selects SHORT candidates when loser is LONG', () => {
+    const eng = engine()
+    const positions = [
+      makePos({ maker: '0xLONG'  as `0x${string}`, size:  1n * 10n ** 18n }),   // long — skipped
+      makePos({ maker: '0xSHORT' as `0x${string}`, size: -(1n * 10n ** 18n) }),  // short — selected
+    ]
+    const result = eng.selectADLTargets(positions, PAIR, QUOTE, 'long', 50n * 10n ** 18n, MARK)
+    expect(result).toHaveLength(1)
+    expect(result[0].maker).toBe('0xSHORT')
+  })
+
+  it('selects LONG candidates when loser is SHORT', () => {
+    const eng = engine()
+    const positions = [
+      makePos({ maker: '0xSHORT' as `0x${string}`, size: -(1n * 10n ** 18n) }),  // short — skipped
+      makePos({ maker: '0xLONG'  as `0x${string}`, size:  1n * 10n ** 18n }),    // long — selected
+    ]
+    const result = eng.selectADLTargets(positions, PAIR, QUOTE, 'short', 50n * 10n ** 18n, MARK)
+    expect(result).toHaveLength(1)
+    expect(result[0].maker).toBe('0xLONG')
+  })
+
+  it('ranks by effective leverage — highest leverage first', () => {
+    const eng = engine()
+    // Size: both 1 ETH short; margins differ
+    // Lower margin → higher leverage → selected first
+    const highLevPos = makePos({
+      maker:  '0xHIGH' as `0x${string}`,
+      size:   -(1n * 10n ** 18n),
+      margin: 50n * 10n ** 18n,   // leverage ≈ 20x
+    })
+    const lowLevPos = makePos({
+      maker:  '0xLOW' as `0x${string}`,
+      size:   -(1n * 10n ** 18n),
+      margin: 200n * 10n ** 18n,  // leverage ≈ 5x
+    })
+    // totalLoss must exceed highLevPos.margin (50e18) so both candidates are needed
+    const result = eng.selectADLTargets([lowLevPos, highLevPos], PAIR, QUOTE, 'long', 100n * 10n ** 18n, MARK)
+    // Highest leverage first
+    expect(result[0].maker).toBe('0xHIGH')
+    expect(result[1].maker).toBe('0xLOW')
+  })
+
+  it('accumulates candidates until totalLoss is covered', () => {
+    const eng = engine()
+    const pos1 = makePos({ maker: '0xP1' as `0x${string}`, size: -(1n * 10n ** 18n), margin: 30n * 10n ** 18n })
+    const pos2 = makePos({ maker: '0xP2' as `0x${string}`, size: -(1n * 10n ** 18n), margin: 30n * 10n ** 18n })
+    const pos3 = makePos({ maker: '0xP3' as `0x${string}`, size: -(1n * 10n ** 18n), margin: 30n * 10n ** 18n })
+
+    // totalLoss = 50e18; each pos has 30e18 margin
+    // Should select pos1 (30e18) + pos2 (20e18 remaining) = 2 candidates
+    const totalLoss = 50n * 10n ** 18n
+    const result = eng.selectADLTargets([pos1, pos2, pos3], PAIR, QUOTE, 'long', totalLoss, MARK)
+
+    expect(result).toHaveLength(2)
+    const totalAmount = result.reduce((sum, c) => sum + c.amount, 0n)
+    expect(totalAmount).toBe(totalLoss)
+  })
+
+  it('each candidate amount is capped at their margin', () => {
+    const eng = engine()
+    const pos = makePos({
+      maker:  '0xBIG' as `0x${string}`,
+      size:   -(1n * 10n ** 18n),
+      margin: 10n * 10n ** 18n,  // only 10 available
+    })
+    // totalLoss = 999 >> margin
+    const result = eng.selectADLTargets([pos], PAIR, QUOTE, 'long', 999n * 10n ** 18n, MARK)
+    expect(result).toHaveLength(1)
+    expect(result[0].amount).toBe(10n * 10n ** 18n)  // capped at margin
+  })
+
+  it('skips positions with zero size', () => {
+    const eng = engine()
+    const zeroPos = makePos({ size: 0n, maker: '0xZERO' as `0x${string}` })
+    const validPos = makePos({ size: -(1n * 10n ** 18n), maker: '0xVALID' as `0x${string}` })
+    const result = eng.selectADLTargets([zeroPos, validPos], PAIR, QUOTE, 'long', 10n * 10n ** 18n, MARK)
+    expect(result).toHaveLength(1)
+    expect(result[0].maker).toBe('0xVALID')
+  })
+
+  it('skips positions from a different pairId', () => {
+    const eng = engine()
+    const wrongPair = makePos({ pairId: 'BTC/KRW', size: -(1n * 10n ** 18n) })
+    const rightPair = makePos({ pairId: PAIR,      size: -(1n * 10n ** 18n), maker: '0xRIGHT' as `0x${string}` })
+    const result = eng.selectADLTargets([wrongPair, rightPair], PAIR, QUOTE, 'long', 10n * 10n ** 18n, MARK)
+    expect(result).toHaveLength(1)
+    expect(result[0].maker).toBe('0xRIGHT')
   })
 })
