@@ -101,6 +101,8 @@ export class FundingRateEngine extends EventEmitter {
   }
 
   computeRate(markPrice: bigint, indexPrice: bigint): FundingRate {
+    // display-only: rate capped at ±4% (±0.04) — safely within Number precision.
+    // Do NOT use this field for financial calculations; use bigint applyFunding() instead.
     const rate = indexPrice > 0n ? Number(markPrice - indexPrice) / Number(indexPrice) : 0
     return { pairId: '', rate, markPrice, indexPrice, timestamp: Date.now() }
   }
