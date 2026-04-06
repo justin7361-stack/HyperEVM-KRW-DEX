@@ -1,7 +1,7 @@
 # HyperKRW DEX — Session Todo
 
-**마지막 업데이트:** 2026-04-06 (세션 4)
-**현재 상태:** Phase S-0 (테스트넷 전 크리티컬 수정) 완료. 28 test files, 251 tests all passing. tsc --noEmit clean. Phase Q (테스트넷 배포)만 남음 (사용자 직접 실행 필요)
+**마지막 업데이트:** 2026-04-06 (세션 5)
+**현재 상태:** Phase S-1 (S-1-1 Dead Man's Switch, S-1-2 ExpiryWorker, S-1-3 Socialized Loss) + Phase S-2 (S-2-1 Orderbook State Root, S-2-2 Broker Fee) 완료. 31 test files, 288 tests all passing. tsc --noEmit clean. 다음: S-3-1 Distributed Liquidator 또는 Phase Q 테스트넷 배포
 
 ---
 
@@ -132,6 +132,42 @@
 - `npx tsc --noEmit`: 에러 0개
 - `npx vitest run`: 28 파일, 251 테스트 all passed
 - `git push origin master`: `43ec703..d0318fd`
+
+## ✅ 완료 — Phase S-1 + S-2 (경쟁 패턴, 2026-04-06 세션 5)
+
+| 태스크 | 레포 | 커밋 | 내용 |
+|-------|------|------|-----|
+| S-1-1: Dead Man's Switch | server `cfd6fa4` | CancelAfterManager (5s~86400s 타이머), POST /orders/cancel-after, GET /orders/cancel-after/:maker — 16 tests |
+| S-1-2: Short Order TTL | — (이미 완료) | ExpiryWorker 이미 구현됨 — 별도 작업 불필요 |
+| S-1-3: Socialized Loss | server `8226f3d` | InsuranceFund.getCumulativeShortfall(), /positions appliedSocializedLoss 필드, 페어별 비율 계산 |
+| S-2-1: Orderbook State Root | server `3b2abef` / contracts `da92cbd` | OrderbookStateRoot.ts (keccak256 flat hash), submitOrderbookRoot.ts, OracleAdmin.postOrderbookRoot() — 9 tests |
+| S-2-2: Broker Fee Layer | server `3b2abef` / contracts `da92cbd` | FeeEngine getBrokerFeeRateBps callback, PairRegistry.setBrokerFeeRate() (max 100bps), FeeCollector.depositBrokerFee()/withdrawBrokerFee() — 7 tests |
+
+**검증 결과:**
+- `npx tsc --noEmit`: 에러 0개
+- `npx vitest run`: 31 파일, 288 테스트 all passed
+- `forge test`: 137/137 passing (contracts)
+- git push: server `3b2abef`, contracts `da92cbd`
+
+**설계 결정사항:**
+- OrderbookStateRoot: flat concat (no Merkle tree) — 단순성 우선, 추후 완전 Merkle로 업그레이드 가능
+- viem encodePacked(['address', ...]): EIP-55 checksum 주소 필요 → `getAddress(o.maker)` 정규화 필수
+- Broker fee: FeeEngine constructor에 선택적 `getBrokerFeeRateBps` 콜백 주입 (PairRegistry에서 읽어야 하면 index.ts에서 연결 필요)
+- InsuranceFund shortfall: 누적 값이며 리셋되지 않음 — ADL로 해소되면 별도 감소 로직 추가 가능
+
+---
+
+## 🔴 다음 작업: Phase S-3 또는 Phase Q 테스트넷 배포
+
+### S-3-1: Distributed Liquidator (Orderly 패턴) — 미구현
+- 외부 청산인이 청산 주문을 제출하고 보상을 받는 구조
+- contracts: LiquidatablePosition 공개 view + LiquidatorReward 이벤트 + liquidateExternal()
+- server: /liquidatable-positions GET 엔드포인트, LiquidationEngine에 외부 청산인 허용 로직
+
+### S-3-2: Agent Wallet (Hyperliquid 패턴) — 미구현
+- 트레이더가 에이전트 지갑에 서명 권한 위임
+- contracts: AgentWallet 허가 등록 매핑, EIP-712 서명 검증 시 위임 체크
+- server: POST /auth/agent-wallet, EIP712Verifier agent 검증 로직
 
 ---
 
