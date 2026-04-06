@@ -83,7 +83,7 @@
 | Vite 코드 스플리팅 | web `5417717` | manualChunks 4개, 모든 페이지 React.lazy() + Suspense |
 | OrderForm markPrice WS | web `9c2f9ac` | useMarkPrice → effectiveMarkPrice(WS\|\|REST) OrderForm/PositionPanel |
 | Playwright E2E 테스트 | web `b9015ca` | playwright.config.ts + e2e/ (navigation, health, orderbook) |
-| Contract Natspec | contracts (진행중) | 7개 컨트랙트 @title/@notice/@dev 문서화 (백그라운드 에이전트) |
+| Contract Natspec | contracts `1fa6d80` | 7개 컨트랙트 @title/@notice/@dev 문서화, 137/137 forge tests 통과 |
 
 ---
 
