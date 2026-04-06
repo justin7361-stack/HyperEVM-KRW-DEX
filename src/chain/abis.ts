@@ -160,4 +160,25 @@ export const ORACLE_ADMIN_ABI = [
     inputs:  [{ name: 'token', type: 'address' }],
     outputs: [{ type: 'uint256' }],
   },
+  // S-2-1: Orderbook state root (Lighter pattern)
+  {
+    name: 'postOrderbookRoot',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'pairId', type: 'bytes32' },
+      { name: 'root',   type: 'bytes32' },
+    ],
+    outputs: [],
+  },
+  {
+    name: 'getOrderbookRoot',
+    type: 'function',
+    stateMutability: 'view',
+    inputs:  [{ name: 'pairId', type: 'bytes32' }],
+    outputs: [
+      { name: 'root',      type: 'bytes32' },
+      { name: 'timestamp', type: 'uint256' },
+    ],
+  },
 ] as const

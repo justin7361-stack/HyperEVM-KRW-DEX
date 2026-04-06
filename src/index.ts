@@ -35,6 +35,7 @@ import { WalletRateLimiter } from './core/matching/WalletRateLimiter.js'
 import { CancelAfterManager } from './core/matching/CancelAfterManager.js'
 import { keccak256, encodePacked } from 'viem'
 import { settleFundingOnChain } from './chain/settleFundingOnChain.js'
+import { submitOrderbookRoot } from './chain/submitOrderbookRoot.js'
 
 const config = loadConfig()
 
@@ -254,6 +255,20 @@ const liquidationInterval = setInterval(() => {
 
 expiryWorker.start()
 
+// S-2-1: Orderbook state root submission every 5 minutes (Lighter pattern).
+// Iterates over all known off-chain pairIds (populated from PairRegistry at startup).
+// Config: ORDERBOOK_ROOT_INTERVAL_MS (default 300000 = 5 min). Set 0 to disable.
+const orderbookRootIntervalMs = parseInt(process.env['ORDERBOOK_ROOT_INTERVAL_MS'] ?? '300000', 10)
+const orderbookRootInterval = orderbookRootIntervalMs > 0
+  ? setInterval(() => {
+      const allOrders = (store as import('./core/orderbook/MemoryOrderBookStore.js').MemoryOrderBookStore).getAllOpenOrders?.() ?? []
+      for (const offChainPairId of pairIdMap.values()) {
+        void submitOrderbookRoot(walletClient as any, config.oracleAdminAddress, allOrders, offChainPairId)
+          .catch(err => console.error('[OrderbookRoot] interval error:', err))
+      }
+    }, orderbookRootIntervalMs)
+  : null
+
 const server = await buildServer({
   config, verifier, policy, matching, store, trades, pairRegistry,
   worker, blocklist, candleStore,
@@ -275,6 +290,7 @@ server.listen({ port: config.port, host: config.host }, (err) => {
 })
 
 async function gracefulShutdown() {
+  if (orderbookRootInterval) clearInterval(orderbookRootInterval)
   cancelAfterManager.destroy()
   walletRateLimiter.destroy()
   expiryWorker.stop()

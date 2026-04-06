@@ -49,6 +49,12 @@ export interface Order {
   // ── Self-Trade Prevention ───────────────────────────────────────────────
   stp?: StpMode  // omitted = EXPIRE_TAKER
 
+  // ── Broker (S-2-2 — Orderly pattern) ────────────────────────────────────
+  // Broker address that routed this order. If set and a brokerFeeRate exists
+  // for the pair (via PairRegistry.getBrokerFeeRate), the server computes a
+  // broker fee that is routed to FeeCollector.depositBrokerFee(broker, ...).
+  broker?: string
+
   // ── GTT expiry ──────────────────────────────────────────────────────────
   goodTillTime?:  bigint        // unix timestamp; used when timeInForce === 'GTT'
 }
@@ -72,6 +78,9 @@ export interface MatchResult {
   matchedAt:  number
   makerFee?:  bigint      // quoteToken units, 18 decimals; positive = fee charged, negative = rebate
   takerFee?:  bigint      // quoteToken units, 18 decimals; always positive (charged)
+  // S-2-2: broker fee, non-zero only when the taker order has a broker and brokerFeeRateBps > 0
+  brokerFee?:  bigint     // quoteToken units; ≤ takerFee
+  brokerAddr?: string     // broker wallet address (from takerOrder.broker)
 }
 
 // ── Orderbook depth ─────────────────────────────────────────────────────────
