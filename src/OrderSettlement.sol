@@ -26,8 +26,16 @@ interface IInsuranceFundDeposit {
 }
 
 /// @title OrderSettlement
-/// @notice CLOB DEX settlement contract. Operators submit matched maker/taker orders
-///         with EIP-712 signatures. Bitmap nonces allow non-sequential cancel.
+/// @notice Core settlement contract for the KRW DEX CLOB. Operators submit off-chain matched
+///         maker/taker orders with EIP-712 signatures for on-chain settlement.
+/// @dev Key invariants:
+///      - Only OPERATOR_ROLE may settle, fund, or deleverage orders.
+///      - GUARDIAN_ROLE may pause; only DEFAULT_ADMIN_ROLE may unpause (deliberate asymmetry).
+///      - Orders cannot be settled twice — bitmap nonces and filledAmount tracking enforce uniqueness.
+///      - Liquidation orders enforce a ±5% mark price slippage cap and route fees to InsuranceFund.
+///      - Regular order fees are routed to FeeCollector.
+///      - CEI (Checks-Effects-Interactions) pattern is maintained throughout.
+///      - ADL collected funds are deposited back into InsuranceFund (not held in this contract).
 contract OrderSettlement is
     Initializable,
     AccessControlUpgradeable,
@@ -39,14 +47,21 @@ contract OrderSettlement is
     using SafeERC20 for IERC20;
     using ECDSA for bytes32;
 
+    /// @notice Role identifier for accounts allowed to submit settlement batches.
+    /// @dev    Held by the off-chain matching engine server. Never expose to end users.
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
+
+    /// @notice Role identifier for accounts allowed to pause the contract.
+    /// @dev    Deliberately cannot unpause — only DEFAULT_ADMIN_ROLE can unpause.
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
 
+    /// @dev EIP-712 typehash for the Order struct. Must match exactly what signers hash off-chain.
     bytes32 private constant ORDER_TYPEHASH = keccak256(
         "Order(address maker,address taker,address baseToken,address quoteToken,"
         "uint256 price,uint256 amount,bool isBuy,uint256 nonce,uint256 expiry,bool isLiquidation)"
     );
 
+    /// @notice A signed order submitted by a maker or taker.
     struct Order {
         address maker;
         address taker;       // address(0) = any taker
@@ -77,14 +92,24 @@ contract OrderSettlement is
         uint256 amount;      // amount to pull from maker (quoteToken, 18 decimals)
     }
 
-    /// @dev nonceBitmap[user][wordIndex] = bitmap of used nonces
+    /// @notice Bitmap of used nonces per user per word. nonceBitmap[user][wordIndex] = bitmap.
+    /// @dev    Nonce N occupies bit (N & 0xff) of word (N >> 8). Once set, cannot be unset.
     mapping(address => mapping(uint256 => uint256)) public nonceBitmap;
-    /// @dev filledAmount[orderHash] = total base amount filled
+
+    /// @notice Cumulative base token amount filled per order hash.
+    /// @dev    filledAmount[orderHash] monotonically increases up to Order.amount.
     mapping(bytes32 => uint256) public filledAmount;
 
+    /// @notice Compliance module used to gate trades and swaps.
     IComplianceModule public compliance;
+
+    /// @notice Registry of whitelisted trading pairs.
     PairRegistry      public pairRegistry;
+
+    /// @notice Fee accumulator that receives regular trading fees.
     FeeCollector      public feeCollector;
+
+    /// @notice Taker fee rate in basis points (e.g. 10 = 0.1%). Max 100 (1%).
     uint256           public takerFeeBps;
 
     /// @notice Liquidation fee in basis points (e.g. 50 = 0.5%).
@@ -97,11 +122,33 @@ contract OrderSettlement is
     ///         address(0) = disabled (even if liquidationFeeBps > 0).
     address public liquidationInsuranceFund;
 
+    /// @notice Emitted when a liquidation settlement is completed.
+    /// @param maker  The address of the liquidated position owner.
+    /// @param pairId Trading pair identifier (keccak256 of baseToken + quoteToken).
+    /// @param amount Base token amount liquidated.
     event LiquidationSettled(address indexed maker, bytes32 indexed pairId, uint256 amount);
+
+    /// @notice Emitted when a liquidation fee is deposited into the InsuranceFund.
+    /// @param pairId Trading pair identifier.
+    /// @param token  Quote token used for the fee.
+    /// @param fee    Fee amount deposited (18 decimals).
     event LiquidationFeeRouted(bytes32 indexed pairId, address indexed token, uint256 fee);
+
+    /// @notice Emitted when the liquidation fee rate is updated by admin.
+    /// @param newFeeBps New fee rate in basis points.
     event LiquidationFeeUpdated(uint256 newFeeBps);
+
+    /// @notice Emitted when the liquidation insurance fund address is updated by admin.
+    /// @param newInsuranceFund New InsuranceFund contract address.
     event LiquidationInsuranceFundUpdated(address newInsuranceFund);
 
+    /// @notice Emitted when a matched order pair is filled on-chain.
+    /// @param orderHash  EIP-712 hash of the maker order.
+    /// @param maker      Maker's address.
+    /// @param taker      Taker's address.
+    /// @param baseToken  Base token address.
+    /// @param fillAmount Amount of base token filled.
+    /// @param fee        Quote token fee charged to the taker.
     event OrderFilled(
         bytes32 indexed orderHash,
         address indexed maker,
@@ -110,11 +157,36 @@ contract OrderSettlement is
         uint256 fillAmount,
         uint256 fee
     );
+
+    /// @notice Emitted when a user cancels an order nonce.
+    /// @param user  Address that cancelled the nonce.
+    /// @param nonce The cancelled nonce value.
     event OrderCancelled(address indexed user, uint256 nonce);
+
+    /// @notice Emitted when the compliance module is replaced.
+    /// @param newModule New IComplianceModule contract address.
     event ComplianceUpdated(address indexed newModule);
+
+    /// @notice Emitted when the taker fee rate is updated.
+    /// @param newFeeBps New fee rate in basis points.
     event TakerFeeUpdated(uint256 newFeeBps);
+
+    /// @notice Emitted when a single funding payment is settled.
+    /// @param maker      Maker (position holder) receiving or paying funding.
+    /// @param quoteToken Token used for the payment.
+    /// @param amount     Signed amount (positive = received, negative = paid).
+    /// @param pairId     Trading pair identifier.
     event FundingSettled(address indexed maker, address indexed quoteToken, int256 amount, bytes32 pairId);
+
+    /// @notice Emitted when an ADL entry is successfully executed.
+    /// @param maker  Profitable trader whose position was reduced.
+    /// @param pairId Trading pair identifier.
+    /// @param amount Quote token amount pulled from the maker.
     event ADLExecuted(address indexed maker, bytes32 indexed pairId, uint256 amount);
+
+    /// @notice Emitted when an ADL entry is skipped (e.g. transfer failed).
+    /// @param maker  Trader whose ADL was skipped.
+    /// @param pairId Trading pair identifier.
     event ADLSkipped(address indexed maker, bytes32 indexed pairId);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -122,6 +194,16 @@ contract OrderSettlement is
         _disableInitializers();
     }
 
+    /// @notice Initialize the contract. Called once by the proxy deployer.
+    /// @dev    Grants DEFAULT_ADMIN_ROLE to admin, OPERATOR_ROLE to operator,
+    ///         and GUARDIAN_ROLE to guardian. EIP-712 domain is "KRW DEX" v1.
+    /// @param admin         Address receiving DEFAULT_ADMIN_ROLE (governance multisig).
+    /// @param operator      Address receiving OPERATOR_ROLE (off-chain matching engine).
+    /// @param guardian      Address receiving GUARDIAN_ROLE (hot-wallet pause key).
+    /// @param _compliance   IComplianceModule for trade gating.
+    /// @param _pairRegistry PairRegistry for pair validation.
+    /// @param _feeCollector FeeCollector for regular fee routing.
+    /// @param _takerFeeBps  Initial taker fee in basis points (max 100).
     function initialize(
         address admin,
         address operator,
@@ -159,6 +241,14 @@ contract OrderSettlement is
     // ─────────────────────────────────────────────
 
     /// @notice Settle a single matched order pair.
+    /// @dev    Both orders must carry valid EIP-712 signatures. Reverts if either order is
+    ///         expired, the pair is inactive, compliance checks fail, or overfill is attempted.
+    ///         For liquidation orders, use settleLiquidation() instead.
+    /// @param makerOrder Maker's signed order struct.
+    /// @param takerOrder Taker's signed order struct.
+    /// @param fillAmount Amount of base token to fill (≤ min(maker.amount, taker.amount)).
+    /// @param makerSig   EIP-712 signature from the maker.
+    /// @param takerSig   EIP-712 signature from the taker (empty bytes = operator-signed taker).
     function settle(
         Order calldata makerOrder,
         Order calldata takerOrder,
@@ -172,6 +262,12 @@ contract OrderSettlement is
     /// @notice Settle multiple maker orders against one taker order (batch).
     /// @dev For liquidation orders use settleLiquidation() which enforces fee exemption
     ///      and ±5% mark price slippage cap.
+    ///      Individual failures are silently skipped (best-effort via try/catch).
+    /// @param makerOrders  Array of maker signed orders.
+    /// @param takerOrder   Single taker order matched against all makers.
+    /// @param fillAmounts  Per-maker fill amounts (must match makerOrders length).
+    /// @param makerSigs    Per-maker EIP-712 signatures.
+    /// @param takerSig     Taker's EIP-712 signature (shared across all fills).
     function settleBatch(
         Order[]   calldata makerOrders,
         Order     calldata takerOrder,
@@ -190,6 +286,7 @@ contract OrderSettlement is
     /// @notice Settle a single liquidation order pair with fee exemption and ±5% slippage cap.
     /// @dev markPrice must be > 0 when makerOrder.isLiquidation is true.
     ///      For non-liquidation single-pair settlement, use the array-based settleBatch.
+    ///      Fill amount is automatically set to min(maker.amount, taker.amount).
     /// @param makerOrder  Maker's signed order (isLiquidation=true enables fee exemption + slippage cap).
     /// @param takerOrder  Taker's signed order.
     /// @param makerSig    EIP-712 signature from maker.
@@ -224,13 +321,17 @@ contract OrderSettlement is
         }
     }
 
-    /// @notice Cancel a single order nonce.
+    /// @notice Cancel a single order nonce, preventing it from being filled.
+    /// @dev    Marks the nonce as used in the bitmap. Reverts if nonce was already used.
+    /// @param nonce The nonce value to cancel.
     function cancelOrder(uint256 nonce) external {
         _useNonce(msg.sender, nonce);
         emit OrderCancelled(msg.sender, nonce);
     }
 
-    /// @notice Cancel multiple nonces in one tx.
+    /// @notice Cancel multiple nonces in one transaction.
+    /// @dev    Reverts if any nonce was already used (all-or-nothing for the batch).
+    /// @param nonces Array of nonce values to cancel.
     function cancelOrders(uint256[] calldata nonces) external {
         for (uint256 i = 0; i < nonces.length; i++) {
             _useNonce(msg.sender, nonces[i]);
@@ -243,8 +344,9 @@ contract OrderSettlement is
     ///         (funded by protocol reserve); negative amount = maker pays into reserve.
     /// @dev    Payments are processed best-effort: individual failures are skipped.
     ///         The operator must hold sufficient quoteToken approval for net outflows.
-    /// @param payments  Array of funding payment records
-    /// @param reserve   Address holding protocol funds for outgoing payments
+    ///         Payments older than 9 hours are silently skipped (1 funding interval + 1h grace).
+    /// @param payments  Array of funding payment records.
+    /// @param reserve   Address holding protocol funds for outgoing payments.
     function settleFunding(
         FundingPayment[] calldata payments,
         address reserve
@@ -259,8 +361,10 @@ contract OrderSettlement is
     ///         when the InsuranceFund is exhausted.
     /// @dev Operator must verify InsuranceFund is exhausted before calling.
     ///      Each maker must have approved this contract to spend quoteToken.
-    ///      Emits ADLExecuted per entry. Best-effort: skips failed entries (try/catch).
-    /// @param entries       Array of ADL entries (makers to deleverage).
+    ///      Best-effort: skips failed entries (try/catch). Collected funds are deposited
+    ///      back into the InsuranceFund (not held in this contract — CR-3 fix).
+    ///      Requires: address(this) holds OPERATOR_ROLE on the InsuranceFund contract.
+    /// @param entries       Array of ADL entries (profitable makers to deleverage).
     /// @param insuranceFund Address of the InsuranceFund contract to check balance.
     /// @param pairId        Trading pair identifier.
     /// @param totalLoss     Total loss amount that triggered ADL (must be > 0).
@@ -317,6 +421,10 @@ contract OrderSettlement is
     //  View
     // ─────────────────────────────────────────────
 
+    /// @notice Compute the EIP-712 hash of an order.
+    /// @dev    Use this to reconstruct the digest that traders sign off-chain.
+    /// @param order The order struct to hash.
+    /// @return The EIP-712 typed data hash.
     function hashOrder(Order calldata order) public view returns (bytes32) {
         return _hashTypedDataV4(keccak256(abi.encode(
             ORDER_TYPEHASH,
@@ -326,12 +434,18 @@ contract OrderSettlement is
         )));
     }
 
+    /// @notice Check whether a nonce has been used (cancelled or fully filled).
+    /// @param user  The account whose nonce bitmap to query.
+    /// @param nonce The nonce value to check.
+    /// @return True if the nonce is already used.
     function isNonceUsed(address user, uint256 nonce) external view returns (bool) {
         uint256 wordIndex = nonce >> 8;
         uint256 bitIndex  = nonce & 0xff;
         return nonceBitmap[user][wordIndex] & (1 << bitIndex) != 0;
     }
 
+    /// @notice Return the EIP-712 domain separator for this contract.
+    /// @return The domain separator hash.
     function domainSeparator() external view returns (bytes32) {
         return _domainSeparatorV4();
     }
@@ -340,12 +454,16 @@ contract OrderSettlement is
     //  Admin
     // ─────────────────────────────────────────────
 
+    /// @notice Replace the compliance module. Admin only.
+    /// @param newModule New IComplianceModule contract address (must be non-zero).
     function setComplianceModule(address newModule) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(newModule != address(0), "Zero address");
         compliance = IComplianceModule(newModule);
         emit ComplianceUpdated(newModule);
     }
 
+    /// @notice Update the taker fee rate. Admin only.
+    /// @param newFeeBps New fee rate in basis points (max 100 = 1%).
     function setTakerFee(uint256 newFeeBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(newFeeBps <= 100, "Fee too high");
         takerFeeBps = newFeeBps;
@@ -584,6 +702,7 @@ contract OrderSettlement is
         emit OrderFilled(makerHash, makerOrder.maker, takerOrder.maker, makerOrder.baseToken, fillAmount, fee);
     }
 
+    /// @dev Run compliance canTrade checks for both sides. Reverts if either fails.
     function _checkCompliance(
         address makerAddr,
         address takerAddr,
@@ -596,6 +715,7 @@ contract OrderSettlement is
         require(takerOk, tr);
     }
 
+    /// @dev Execute token transfers for a settled order pair.
     /// @param feeReceiver address(0) = route fee to FeeCollector (regular orders).
     ///                    Non-zero   = route fee to that address via IInsuranceFundDeposit.deposit()
     ///                                 (liquidation orders → InsuranceFund). Requires that contract
