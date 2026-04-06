@@ -1,7 +1,8 @@
 # HyperKRW DEX — Session Todo
 
-**마지막 업데이트:** 2026-04-06 (세션 5)
-**현재 상태:** Phase S-1 (S-1-1 Dead Man's Switch, S-1-2 ExpiryWorker, S-1-3 Socialized Loss) + Phase S-2 (S-2-1 Orderbook State Root, S-2-2 Broker Fee) 완료. 31 test files, 288 tests all passing. tsc --noEmit clean. 다음: S-3-1 Distributed Liquidator 또는 Phase Q 테스트넷 배포
+**마지막 업데이트:** 2026-04-06 (세션 5 종료)
+**현재 상태:** Phase S-0 ~ S-2 전체 완료. 31 test files, 288 tests all passing. tsc --noEmit clean.
+**다음 세션 시작점:** S-3-1 (Distributed Liquidator) 또는 Phase Q (테스트넷 배포) 선택
 
 ---
 
