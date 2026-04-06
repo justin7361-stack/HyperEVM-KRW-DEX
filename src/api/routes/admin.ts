@@ -20,7 +20,15 @@ export function circuitBreakerAdminRoutes(
     fastify.addHook('preHandler', auth)
 
     // POST /admin/halt — manually halt trading for a pair
-    fastify.post<{ Body: HaltBody }>('/admin/halt', async (req, reply) => {
+    fastify.post<{ Body: HaltBody }>('/admin/halt', {
+      schema: {
+        tags: ['admin'],
+        summary: 'Halt trading for a pair',
+        security: [{ AdminKeyAuth: [] }],
+        body: { type: 'object', required: ['pairId'], properties: { pairId: { type: 'string' }, reason: { type: 'string' } } },
+        response: { 200: { type: 'object', properties: { halted: { type: 'boolean' }, pairId: { type: 'string' } } } },
+      },
+    }, async (req, reply) => {
       const { pairId, reason = 'admin: manual halt' } = req.body
       if (!pairId) {
         return reply.status(400).send({ error: 'pairId required' })
@@ -30,7 +38,15 @@ export function circuitBreakerAdminRoutes(
     })
 
     // POST /admin/resume — resume trading for a pair
-    fastify.post<{ Body: ResumeBody }>('/admin/resume', async (req, reply) => {
+    fastify.post<{ Body: ResumeBody }>('/admin/resume', {
+      schema: {
+        tags: ['admin'],
+        summary: 'Resume trading for a pair',
+        security: [{ AdminKeyAuth: [] }],
+        body: { type: 'object', required: ['pairId'], properties: { pairId: { type: 'string' } } },
+        response: { 200: { type: 'object', properties: { resumed: { type: 'boolean' }, pairId: { type: 'string' } } } },
+      },
+    }, async (req, reply) => {
       const { pairId } = req.body
       if (!pairId) {
         return reply.status(400).send({ error: 'pairId required' })
@@ -40,7 +56,21 @@ export function circuitBreakerAdminRoutes(
     })
 
     // GET /admin/halted — list all currently halted pairs
-    fastify.get('/admin/halted', async (_req, reply) => {
+    fastify.get('/admin/halted', {
+      schema: {
+        tags: ['admin'],
+        summary: 'List all halted pairs',
+        security: [{ AdminKeyAuth: [] }],
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              halted: { type: 'array', items: { type: 'object', properties: { pairId: { type: 'string' }, reason: { type: 'string' }, haltedAt: { type: 'integer' } } } },
+            },
+          },
+        },
+      },
+    }, async (_req, reply) => {
       return reply.send({ halted: circuitBreaker.getHaltedPairs() })
     })
   }

@@ -1,3 +1,4 @@
+import { EventEmitter } from 'events'
 import type { MatchResult, MarginMode, MarginPosition } from '../../types/order.js'
 import type { Address } from 'viem'
 
@@ -20,8 +21,12 @@ interface PositionState {
  *          immediately eligible for liquidation. Now computes margin from fill price + leverage.
  *  CR-2 — onMatch() was only updating the maker side. Now updates both maker and taker.
  */
-export class PositionTracker {
+export class PositionTracker extends EventEmitter {
   private readonly pos = new Map<string, PositionState>()
+
+  constructor() {
+    super()
+  }
 
   private key(maker: string, pairId: string): string {
     return `${maker.toLowerCase()}:${pairId}`
@@ -128,8 +133,18 @@ export class PositionTracker {
     }
 
     // Guard: keep at least 1n margin for open positions (prevents false liquidation trigger)
-    this.pos.set(k, { size: next, margin: nextMargin > 0n ? nextMargin : 1n, mode, entryPrice: nextEntry })
+    const state = { size: next, margin: nextMargin > 0n ? nextMargin : 1n, mode, entryPrice: nextEntry }
+    this.pos.set(k, state)
     // Note: next===0n case is handled above (early return with map.delete)
+
+    this.emit('position.updated', {
+      maker:      maker,
+      pairId:     pairId,
+      size:       state.size.toString(),
+      margin:     state.margin.toString(),
+      mode:       state.mode,
+      entryPrice: state.entryPrice.toString(),
+    })
   }
 
   getPosition(maker: string, pairId: string): bigint {

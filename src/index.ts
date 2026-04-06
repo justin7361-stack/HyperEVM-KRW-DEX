@@ -236,7 +236,7 @@ const liquidationInterval = setInterval(() => {
 
 expiryWorker.start()
 
-const server = buildServer({
+const server = await buildServer({
   config, verifier, policy, matching, store, trades, pairRegistry,
   worker, blocklist, candleStore,
   conditionalEngine, positionTracker, traderKeyStore,

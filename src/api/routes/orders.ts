@@ -41,7 +41,49 @@ export function ordersRoutes(
 ) {
   return async function (fastify: FastifyInstance) {
     // POST /orders — submit a signed order
-    fastify.post<{ Body: SubmitOrderBody }>('/orders', async (req, reply) => {
+    fastify.post<{ Body: SubmitOrderBody }>('/orders', {
+      schema: {
+        tags: ['orders'],
+        summary: 'Submit a signed order',
+        security: [{ ApiKeyAuth: [] }],
+        body: {
+          type: 'object',
+          required: ['order', 'signature'],
+          properties: {
+            order: {
+              type: 'object',
+              required: ['maker','baseToken','quoteToken','price','amount','nonce','expiry','isBuy'],
+              properties: {
+                maker:        { type: 'string', description: 'Maker wallet address (0x...)' },
+                baseToken:    { type: 'string' },
+                quoteToken:   { type: 'string' },
+                price:        { type: 'string', description: 'Price in KRW (bigint as string, 18 decimals)' },
+                amount:       { type: 'string', description: 'Amount in base token (bigint as string, 18 decimals)' },
+                nonce:        { type: 'string' },
+                expiry:       { type: 'string' },
+                isBuy:        { type: 'boolean' },
+                orderType:    { type: 'string', enum: ['limit', 'market'] },
+                timeInForce:  { type: 'string', enum: ['GTC', 'IOC', 'FOK', 'GTT', 'POST_ONLY'] },
+                reduceOnly:   { type: 'boolean' },
+                leverage:     { type: 'string' },
+              },
+            },
+            signature: { type: 'string', description: 'EIP-712 signature' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              orderId: { type: 'string' },
+              status:  { type: 'string' },
+            },
+          },
+          400: { type: 'object', properties: { error: { type: 'string' } } },
+          503: { type: 'object', properties: { error: { type: 'string' } } },
+        },
+      },
+    }, async (req, reply) => {
       const { signature, makerIp = req.ip } = req.body
 
       // Convert JSON numbers/strings to bigint (HTTP JSON doesn't have bigint type)
@@ -135,6 +177,17 @@ export function ordersRoutes(
     // DELETE /orders/:nonce — cancel an order
     fastify.delete<{ Params: CancelOrderParams; Body: CancelOrderBody }>(
       '/orders/:nonce',
+      {
+        schema: {
+          tags: ['orders'],
+          summary: 'Cancel an order by nonce',
+          params: { type: 'object', properties: { nonce: { type: 'string' } } },
+          response: {
+            200: { type: 'object', properties: { cancelled: { type: 'boolean' } } },
+            404: { type: 'object', properties: { error: { type: 'string' } } },
+          },
+        },
+      },
       async (req, reply) => {
         const { maker } = req.body
 
@@ -278,7 +331,34 @@ export function ordersRoutes(
     fastify.get<{
       Params: { address: string }
       Querystring: { status?: string }
-    }>('/orders/:address', async (req, reply) => {
+    }>('/orders/:address', {
+      schema: {
+        tags: ['orders'],
+        summary: 'Get orders for an address',
+        params: { type: 'object', properties: { address: { type: 'string' } } },
+        querystring: { type: 'object', properties: { status: { type: 'string', enum: ['open','partial','filled','cancelled','all'] } } },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              orders: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' }, maker: { type: 'string' },
+                    baseToken: { type: 'string' }, quoteToken: { type: 'string' },
+                    price: { type: 'string' }, amount: { type: 'string' },
+                    filledAmount: { type: 'string' }, status: { type: 'string' },
+                    isBuy: { type: 'boolean' }, orderType: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }, async (req, reply) => {
       const statusFilter = req.query.status ?? 'open'
       const orders = await store.getOrdersByMaker(req.params.address)
 

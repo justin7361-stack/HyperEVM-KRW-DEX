@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import type { Address } from 'viem'
 import { buildServer } from '../../src/api/server.js'
+import type { FastifyInstance } from 'fastify'
 import { EIP712Verifier } from '../../src/verification/EIP712Verifier.js'
 import { PolicyEngine } from '../../src/compliance/PolicyEngine.js'
 import { BasicBlocklistPlugin } from '../../src/compliance/plugins/BasicBlocklistPlugin.js'
@@ -39,7 +40,7 @@ describe('API Integration', () => {
   const pk1  = generatePrivateKey()
   const acc1 = privateKeyToAccount(pk1)
 
-  let server: ReturnType<typeof buildServer>
+  let server: FastifyInstance
   let store:  MemoryOrderBookStore
 
   beforeAll(async () => {
@@ -55,7 +56,7 @@ describe('API Integration', () => {
       },
     } as any
 
-    server = buildServer({
+    server = await buildServer({
       config:   { batchSize: 10, batchTimeoutMs: 1000 } as any,
       verifier: new EIP712Verifier(DOMAIN),
       policy, matching, store,

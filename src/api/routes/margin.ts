@@ -12,7 +12,21 @@ export function marginRoutes(marginAccount: MarginAccount) {
 
     // POST /margin/deposit — credit in-memory margin balance
     // ⚠️ Testnet only: no on-chain verification. Production must verify on-chain collateral.
-    fastify.post<{ Body: DepositBody }>('/margin/deposit', async (req, reply) => {
+    fastify.post<{ Body: DepositBody }>('/margin/deposit', {
+      schema: {
+        tags: ['positions'],
+        summary: 'Record a margin deposit (called by settlement contract callback)',
+        body: {
+          type: 'object',
+          required: ['maker', 'amount'],
+          properties: {
+            maker:  { type: 'string' },
+            amount: { type: 'string' },
+          },
+        },
+        response: { 200: { type: 'object', properties: { ok: { type: 'boolean' } } } },
+      },
+    }, async (req, reply) => {
       const { maker, amount } = req.body
       if (!maker || !ADDRESS_RE.test(maker)) {
         return reply.status(400).send({ error: 'Invalid maker address' })
@@ -61,7 +75,24 @@ export function marginRoutes(marginAccount: MarginAccount) {
     })
 
     // GET /margin/:address — query margin account state
-    fastify.get<{ Params: { address: string } }>('/margin/:address', async (req, reply) => {
+    fastify.get<{ Params: { address: string } }>('/margin/:address', {
+      schema: {
+        tags: ['positions'],
+        summary: 'Get margin balance for an address',
+        params: { type: 'object', properties: { address: { type: 'string' } } },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              address:      { type: 'string' },
+              totalBalance: { type: 'string' },
+              freeMargin:   { type: 'string' },
+              usedMargin:   { type: 'string' },
+            },
+          },
+        },
+      },
+    }, async (req, reply) => {
       const addr = req.params.address as Address
       if (!ADDRESS_RE.test(addr)) {
         return reply.status(400).send({ error: 'Invalid address' })

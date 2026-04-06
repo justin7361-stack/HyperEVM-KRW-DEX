@@ -3,6 +3,8 @@ import fastifyWebSocket from '@fastify/websocket'
 import fastifyCors from '@fastify/cors'
 import fastifyRateLimit from '@fastify/rate-limit'
 import fastifyStatic from '@fastify/static'
+import swagger from '@fastify/swagger'
+import swaggerUi from '@fastify/swagger-ui'
 import { fileURLToPath } from 'url'
 import { join, dirname } from 'path'
 import type { Config } from '../config/config.js'
@@ -34,7 +36,7 @@ import type { IPubSub } from '../pubsub/RedisPubSub.js'
 import type { CircuitBreaker } from '../core/matching/CircuitBreaker.js'
 import { circuitBreakerAdminRoutes } from './routes/admin.js'
 
-export function buildServer(deps: {
+export async function buildServer(deps: {
   config:              Config
   verifier:            IOrderVerifier
   policy:              PolicyEngine
@@ -59,6 +61,46 @@ export function buildServer(deps: {
   const { config, verifier, policy, matching, store, trades, pairRegistry, worker, blocklist } = deps
   const fastify = Fastify({ logger: true })
 
+  await fastify.register(swagger, {
+    openapi: {
+      info: {
+        title: 'HyperKRW DEX API',
+        description: 'Perpetual futures DEX on HyperEVM — order submission, positions, funding, margin',
+        version: process.env['npm_package_version'] ?? '0.1.0',
+      },
+      servers: [{ url: '/' }],
+      components: {
+        securitySchemes: {
+          ApiKeyAuth: {
+            type: 'apiKey',
+            in: 'header',
+            name: 'X-API-Key',
+            description: 'Trader API key (required for order submission)',
+          },
+          AdminKeyAuth: {
+            type: 'apiKey',
+            in: 'header',
+            name: 'X-Admin-Key',
+            description: 'Admin API key (required for admin endpoints)',
+          },
+        },
+      },
+      tags: [
+        { name: 'orders', description: 'Order submission and management' },
+        { name: 'positions', description: 'Position tracking and margin' },
+        { name: 'market', description: 'Orderbook, trades, funding, candles' },
+        { name: 'admin', description: 'Circuit breaker and admin controls' },
+        { name: 'system', description: 'Health and status' },
+      ],
+    },
+  })
+
+  await fastify.register(swaggerUi, {
+    routePrefix: '/docs',
+    uiConfig: { docExpansion: 'list', deepLinking: true },
+    staticCSP: true,
+  })
+
   fastify.register(fastifyCors,      { origin: true })
   fastify.register(fastifyRateLimit, { max: 100, timeWindow: '1 minute' })
   fastify.register(fastifyWebSocket)
@@ -73,6 +115,7 @@ export function buildServer(deps: {
     deps.getMarkPrice  ?? (() => 0n),
     deps.getIndexPrice ?? (() => 0n),
     deps.fundingEngine,
+    deps.positionTracker,
   ))
 
   if (deps.candleStore) fastify.register(candlesRoutes(deps.candleStore))
@@ -121,7 +164,23 @@ export function buildServer(deps: {
   }
 
   // Enhanced health check — used by Railway, Docker, Traefik, and monitoring
-  fastify.get('/health', async (_req, reply) => {
+  fastify.get('/health', {
+    schema: {
+      tags: ['system'],
+      summary: 'Health check',
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            status:  { type: 'string' },
+            ts:      { type: 'integer' },
+            version: { type: 'string' },
+            checks:  { type: 'object', additionalProperties: { type: 'string' } },
+          },
+        },
+      },
+    },
+  }, async (_req, reply) => {
     const checks: Record<string, 'ok' | 'degraded' | 'n/a'> = {
       matching: 'ok',   // always ok if server is running
       db:       deps.db     ? 'ok' : 'n/a',

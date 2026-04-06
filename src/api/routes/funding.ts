@@ -7,7 +7,25 @@ export function fundingRoutes(
   getIndexPrice: (pair: string) => bigint,
 ) {
   return async function (fastify: FastifyInstance) {
-    fastify.get<{ Params: { pair: string } }>('/funding/:pair', async (req, reply) => {
+    fastify.get<{ Params: { pair: string } }>('/funding/:pair', {
+      schema: {
+        tags: ['market'],
+        summary: 'Get funding rate and mark price for a pair',
+        params: { type: 'object', properties: { pair: { type: 'string' } } },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              pairId:        { type: 'string' },
+              rate:          { type: 'string', description: 'Funding rate (bigint scaled 1e18)' },
+              markPrice:     { type: 'string' },
+              indexPrice:    { type: 'string' },
+              nextFundingAt: { type: 'integer' },
+            },
+          },
+        },
+      },
+    }, async (req, reply) => {
       const pairId  = decodeURIComponent(req.params.pair)
       const funding = engine.computeRate(getMarkPrice(pairId), getIndexPrice(pairId))
 

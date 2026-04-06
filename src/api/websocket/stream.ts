@@ -5,6 +5,7 @@ import type { TradeStore } from '../routes/trades.js'
 import type { WebSocket } from '@fastify/websocket'
 import type { FastifyRequest } from 'fastify'
 import type { FundingRateEngine } from '../../core/funding/FundingRateEngine.js'
+import type { PositionTracker } from '../../core/position/PositionTracker.js'
 
 const MARK_PRICE_INTERVAL_MS = 5_000
 const FUNDING_INTERVAL_MS    = 30_000
@@ -20,11 +21,12 @@ function serializeMatch(match: MatchResult) {
 }
 
 export function streamRoutes(
-  matching:       MatchingEngine,
-  tradeStore:     TradeStore,
-  getMarkPrice:   (pairId: string) => bigint,
-  getIndexPrice:  (pairId: string) => bigint,
-  fundingEngine?: FundingRateEngine,
+  matching:         MatchingEngine,
+  tradeStore:       TradeStore,
+  getMarkPrice:     (pairId: string) => bigint,
+  getIndexPrice:    (pairId: string) => bigint,
+  fundingEngine?:   FundingRateEngine,
+  positionTracker?: PositionTracker,
 ) {
   return async function (fastify: FastifyInstance) {
     fastify.get('/stream', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
@@ -132,6 +134,23 @@ export function streamRoutes(
 
       matching.on('matched', onMatched)
 
+      // ── Position updates ─────────────────────────────────────────────────────
+      const onPositionUpdated = (pos: {
+        maker: string; pairId: string; size: string; margin: string;
+        mode: string; entryPrice: string;
+      }) => {
+        if (pos.pairId !== pairId && !pos.pairId.includes(pairId) && !pairId.includes(pos.pairId)) return
+        if (socket.readyState !== socket.OPEN) return
+        socket.send(JSON.stringify({
+          type: 'position.update',
+          data: pos,
+        }))
+      }
+
+      if (positionTracker) {
+        positionTracker.on('position.updated', onPositionUpdated)
+      }
+
       // --- Mark price periodic push (every 5s) ---
       const markPriceInterval = setInterval(() => {
         if (socket.readyState !== socket.OPEN) return
@@ -197,6 +216,7 @@ export function streamRoutes(
 
       socket.on('close', () => {
         matching.off('matched', onMatched)
+        if (positionTracker) positionTracker.off('position.updated', onPositionUpdated)
         clearInterval(markPriceInterval)
         if (fundingInterval) clearInterval(fundingInterval)
         clearInterval(pingInterval)

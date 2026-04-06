@@ -13,7 +13,38 @@ export function positionsRoutes(
   return async function (fastify: FastifyInstance) {
 
     // GET /positions/:address — all positions for a maker
-    fastify.get<{ Params: { address: string } }>('/positions/:address', async (req, reply) => {
+    fastify.get<{ Params: { address: string } }>('/positions/:address', {
+      schema: {
+        tags: ['positions'],
+        summary: 'Get all positions for an address',
+        params: { type: 'object', properties: { address: { type: 'string' } } },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              address:      { type: 'string' },
+              totalBalance: { type: 'string' },
+              freeMargin:   { type: 'string' },
+              positions: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    pairId:        { type: 'string' },
+                    size:          { type: 'string', description: 'Positive=long, negative=short' },
+                    margin:        { type: 'string' },
+                    mode:          { type: 'string', enum: ['cross', 'isolated'] },
+                    entryPrice:    { type: 'string' },
+                    markPrice:     { type: 'string' },
+                    unrealizedPnl: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }, async (req, reply) => {
       const addr = req.params.address.toLowerCase()
       if (!ADDRESS_RE.test(req.params.address)) {
         return reply.status(400).send({ error: 'Invalid address' })

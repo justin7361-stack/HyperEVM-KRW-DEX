@@ -19,7 +19,31 @@ export class TradeStore {
 
 export function tradesRoutes(tradeStore: TradeStore) {
   return async function (fastify: FastifyInstance) {
-    fastify.get<{ Params: { pair: string } }>('/trades/:pair', async (req, reply) => {
+    fastify.get<{ Params: { pair: string } }>('/trades/:pair', {
+      schema: {
+        tags: ['market'],
+        summary: 'Get recent trades for a pair',
+        params: { type: 'object', properties: { pair: { type: 'string' } } },
+        querystring: { type: 'object', properties: { limit: { type: 'integer', default: 50 } } },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              trades: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    price: { type: 'string' }, amount: { type: 'string' },
+                    isBuyerMaker: { type: 'boolean' }, tradedAt: { type: 'integer' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }, async (req, reply) => {
       const pairId = decodeURIComponent(req.params.pair)
       const trades = tradeStore.get(pairId, 50)
       return reply.send({
