@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import type { PositionTracker } from '../../core/position/PositionTracker.js'
 import type { MarginAccount } from '../../margin/MarginAccount.js'
 import type { MarkPriceOracle } from '../../core/oracle/MarkPriceOracle.js'
+import type { IInsuranceFund } from '../../core/insurance/InsuranceFund.js'
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 
@@ -9,6 +10,7 @@ export function positionsRoutes(
   positionTracker: PositionTracker,
   marginAccount:   MarginAccount,
   getMarkPrice?:   (pairId: string) => bigint,
+  insuranceFund?:  IInsuranceFund,
 ) {
   return async function (fastify: FastifyInstance) {
 
@@ -35,8 +37,12 @@ export function positionsRoutes(
                     margin:        { type: 'string' },
                     mode:          { type: 'string', enum: ['cross', 'isolated'] },
                     entryPrice:    { type: 'string' },
-                    markPrice:     { type: 'string' },
-                    unrealizedPnl: { type: 'string' },
+                    markPrice:              { type: 'string' },
+                    unrealizedPnl:          { type: 'string' },
+                    appliedSocializedLoss:  { type: 'string',
+                      description: 'Socialized loss haircut applied to this position (Paradex pattern). ' +
+                                   '= margin × (cumulativeShortfall / totalPairMargin). ' +
+                                   '"0" when InsuranceFund has never been exhausted.' },
                   },
                 },
               },
@@ -57,21 +63,42 @@ export function positionsRoutes(
 
       const marginState = marginAccount.getState(req.params.address as `0x${string}`)
 
+      // Socialized loss (S-1-3 — Paradex pattern):
+      // ratio = cumulativeShortfall / totalMarginAcrossAllPositionsInPair
+      // per-position haircut = position.margin × ratio
+      const SCALE = 10n ** 18n
+      // Precompute per-pair socialized loss ratio (cached within this request)
+      const socRatioCache = new Map<string, bigint>()
+      const getSocLossRatio = (pairId: string): bigint => {
+        if (socRatioCache.has(pairId)) return socRatioCache.get(pairId)!
+        if (!insuranceFund) { socRatioCache.set(pairId, 0n); return 0n }
+        const shortfall   = insuranceFund.getCumulativeShortfall(pairId)
+        if (shortfall === 0n) { socRatioCache.set(pairId, 0n); return 0n }
+        const totalMargin = positionTracker.getAll()
+          .filter(p => p.pairId === pairId)
+          .reduce((sum, p) => sum + p.margin, 0n)
+        const ratio = totalMargin > 0n ? shortfall * SCALE / totalMargin : 0n
+        socRatioCache.set(pairId, ratio)
+        return ratio
+      }
+
       const result = makerPositions.map(p => {
-        const markPrice = getMarkPrice ? getMarkPrice(p.pairId) : 0n
-        const absSize   = p.size < 0n ? -p.size : p.size
-        const pnl       = p.size > 0n
-          ? (markPrice - p.entryPrice) * absSize / (10n ** 18n)
-          : (p.entryPrice - markPrice) * absSize / (10n ** 18n)
+        const markPrice           = getMarkPrice ? getMarkPrice(p.pairId) : 0n
+        const absSize             = p.size < 0n ? -p.size : p.size
+        const pnl                 = p.size > 0n
+          ? (markPrice - p.entryPrice) * absSize / SCALE
+          : (p.entryPrice - markPrice) * absSize / SCALE
+        const appliedSocLoss      = p.margin * getSocLossRatio(p.pairId) / SCALE
         return {
-          maker:            p.maker,
-          pairId:           p.pairId,
-          size:             p.size.toString(),
-          margin:           p.margin.toString(),
-          mode:             p.mode,
-          entryPrice:       p.entryPrice.toString(),
-          markPrice:        markPrice.toString(),
-          unrealizedPnl:    pnl.toString(),
+          maker:                  p.maker,
+          pairId:                 p.pairId,
+          size:                   p.size.toString(),
+          margin:                 p.margin.toString(),
+          mode:                   p.mode,
+          entryPrice:             p.entryPrice.toString(),
+          markPrice:              markPrice.toString(),
+          unrealizedPnl:          pnl.toString(),
+          appliedSocializedLoss:  appliedSocLoss.toString(),
         }
       })
 

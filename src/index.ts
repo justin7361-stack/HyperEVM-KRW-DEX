@@ -267,6 +267,7 @@ const server = await buildServer({
   circuitBreaker,
   walletRateLimiter,
   cancelAfterManager,
+  insuranceFund,
 })
 
 server.listen({ port: config.port, host: config.host }, (err) => {

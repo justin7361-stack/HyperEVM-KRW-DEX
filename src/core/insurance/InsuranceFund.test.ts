@@ -78,6 +78,49 @@ describe('InsuranceFund', () => {
     expect(fund.getBalance('UNKNOWN/PAIR')).toBe(0n)
   })
 
+  // ── Socialized Loss (S-1-3 — Paradex pattern) ──────────────────────────
+
+  it('getCumulativeShortfall() is 0n when fund always covers losses', () => {
+    const fund = new InsuranceFund()
+    fund.deposit(PAIR, 1000n)
+    fund.cover(PAIR, 300n)
+    fund.cover(PAIR, 200n)
+    expect(fund.getCumulativeShortfall(PAIR)).toBe(0n)
+  })
+
+  it('getCumulativeShortfall() accumulates shortfall on partial cover', () => {
+    const fund = new InsuranceFund()
+    fund.deposit(PAIR, 30n)
+    fund.cover(PAIR, 100n)   // shortfall = 70
+    expect(fund.getCumulativeShortfall(PAIR)).toBe(70n)
+  })
+
+  it('getCumulativeShortfall() accumulates across multiple shortfall events', () => {
+    const fund = new InsuranceFund()
+    fund.deposit(PAIR, 10n)
+    fund.cover(PAIR, 50n)    // shortfall = 40; balance → 0
+
+    fund.deposit(PAIR, 5n)
+    fund.cover(PAIR, 20n)    // shortfall = 15; balance → 0
+
+    expect(fund.getCumulativeShortfall(PAIR)).toBe(55n)
+  })
+
+  it('getCumulativeShortfall() is 0n for unknown pair', () => {
+    const fund = new InsuranceFund()
+    expect(fund.getCumulativeShortfall('UNKNOWN/PAIR')).toBe(0n)
+  })
+
+  it('getCumulativeShortfall() is pair-specific', () => {
+    const fund = new InsuranceFund()
+    fund.cover(PAIR,  100n)   // shortfall 100
+    fund.deposit(PAIR2, 500n)
+    fund.cover(PAIR2,  200n)  // fully covered — no shortfall
+
+    expect(fund.getCumulativeShortfall(PAIR)).toBe(100n)
+    expect(fund.getCumulativeShortfall(PAIR2)).toBe(0n)
+  })
+
   it('getSnapshot() returns all pair balances', () => {
     const fund = new InsuranceFund()
     fund.deposit(PAIR, 200n)

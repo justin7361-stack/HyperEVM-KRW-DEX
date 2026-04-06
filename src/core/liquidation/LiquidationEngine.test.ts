@@ -162,6 +162,7 @@ describe('LiquidationEngine', () => {
       },
       deposit(_pairId: string, _amount: bigint): void {},
       getBalance(_pairId: string): bigint { return 0n },
+      getCumulativeShortfall(_pairId: string): bigint { return 0n },
     }
 
     const engine = new LiquidationEngine(oracle, submitFn, 250n, mockFund)

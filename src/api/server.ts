@@ -37,6 +37,7 @@ import type { CircuitBreaker } from '../core/matching/CircuitBreaker.js'
 import { circuitBreakerAdminRoutes } from './routes/admin.js'
 import type { WalletRateLimiter } from '../core/matching/WalletRateLimiter.js'
 import type { CancelAfterManager } from '../core/matching/CancelAfterManager.js'
+import type { IInsuranceFund } from '../core/insurance/InsuranceFund.js'
 
 export async function buildServer(deps: {
   config:              Config
@@ -61,6 +62,7 @@ export async function buildServer(deps: {
   circuitBreaker?:      CircuitBreaker
   walletRateLimiter?:   WalletRateLimiter
   cancelAfterManager?:  CancelAfterManager
+  insuranceFund?:       IInsuranceFund
 }) {
   const { config, verifier, policy, matching, store, trades, pairRegistry, worker, blocklist } = deps
   const fastify = Fastify({ logger: true })
@@ -139,6 +141,7 @@ export async function buildServer(deps: {
       deps.positionTracker,
       deps.marginAccount ?? new MarginAccount(deps.positionTracker!),
       deps.getMarkPrice,
+      deps.insuranceFund,
     ))
   }
 
