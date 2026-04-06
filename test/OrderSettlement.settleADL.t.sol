@@ -82,6 +82,12 @@ contract OrderSettlementADLTest is Test {
             abi.encodeCall(InsuranceFund.initialize, (admin, operator, guardian))
         )));
 
+        // CR-3 fix: grant OPERATOR_ROLE on InsuranceFund to settlement so it can call deposit()
+        // Cache role constant BEFORE vm.prank — staticcall to OPERATOR_ROLE() would consume the prank
+        bytes32 insuranceFundOpRole = insuranceFund.OPERATOR_ROLE();
+        vm.prank(admin);
+        insuranceFund.grantRole(insuranceFundOpRole, address(settlement));
+
         // Mint KRW to makers
         krw.mint(makerA, 1_000_000 ether);
         krw.mint(makerB, 1_000_000 ether);
@@ -122,14 +128,15 @@ contract OrderSettlementADLTest is Test {
         OrderSettlement.ADLEntry[] memory entries = new OrderSettlement.ADLEntry[](1);
         entries[0] = _entry(makerA, 100 ether);
 
-        uint256 makerABefore = krw.balanceOf(makerA);
-        uint256 settleBefore = krw.balanceOf(address(settlement));
+        uint256 makerABefore  = krw.balanceOf(makerA);
+        uint256 fundBefore    = krw.balanceOf(address(insuranceFund));
 
         vm.prank(operator);
         settlement.settleADL(entries, address(insuranceFund), PAIR_ID, 100 ether);
 
-        assertEq(krw.balanceOf(makerA),              makerABefore  - 100 ether, "makerA debited");
-        assertEq(krw.balanceOf(address(settlement)), settleBefore  + 100 ether, "settlement credited");
+        assertEq(krw.balanceOf(makerA),                  makerABefore - 100 ether,            "makerA debited");
+        assertEq(krw.balanceOf(address(settlement)),      0,             "settlement balance zero (CR-3)");
+        assertEq(krw.balanceOf(address(insuranceFund)),   fundBefore + 100 ether,  "insuranceFund credited");
     }
 
     // -------------------------------------------------------------------------
@@ -141,7 +148,7 @@ contract OrderSettlementADLTest is Test {
         entries[1] = _entry(makerB, 200 ether);
         entries[2] = _entry(makerC, 50 ether);
 
-        uint256 settleBefore = krw.balanceOf(address(settlement));
+        uint256 fundBefore = krw.balanceOf(address(insuranceFund));
 
         vm.prank(operator);
         settlement.settleADL(entries, address(insuranceFund), PAIR_ID, 350 ether);
@@ -149,7 +156,8 @@ contract OrderSettlementADLTest is Test {
         assertEq(krw.balanceOf(makerA), 1_000_000 ether - 100 ether, "makerA debited");
         assertEq(krw.balanceOf(makerB), 1_000_000 ether - 200 ether, "makerB debited");
         assertEq(krw.balanceOf(makerC), 1_000_000 ether - 50 ether,  "makerC debited");
-        assertEq(krw.balanceOf(address(settlement)), settleBefore + 350 ether, "total collected");
+        assertEq(krw.balanceOf(address(settlement)), 0,               "settlement zero (CR-3)");
+        assertEq(krw.balanceOf(address(insuranceFund)), fundBefore + 350 ether, "fund credited");
     }
 
     // -------------------------------------------------------------------------

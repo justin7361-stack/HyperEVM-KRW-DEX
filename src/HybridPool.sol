@@ -9,6 +9,7 @@ import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "./interfaces/IComplianceModule.sol";
 import "./OracleAdmin.sol";
 import "./FeeCollector.sol";
@@ -186,17 +187,23 @@ contract HybridPool is
         returns (uint256 lpTokens)
     {
         uint256 totalSupply_ = totalSupply();
+        // CR-5 fix: normalise to 18 decimals so KRW (18) and USDC (6) are comparable
+        uint256[2] memory muls = _precisionMultipliers();
+        uint256[2] memory amountsNorm;
+        amountsNorm[0] = amounts[0] * muls[0];
+        amountsNorm[1] = amounts[1] * muls[1];
 
         if (totalSupply_ == 0) {
-            uint256 d = _geometricMean(amounts);
+            uint256 d = _geometricMean(amountsNorm);
             require(d > MINIMUM_LIQUIDITY, "Insufficient initial liquidity");
             lpTokens = d - MINIMUM_LIQUIDITY;
             _mint(address(0xdead), MINIMUM_LIQUIDITY);
         } else {
             uint256 minRatio = type(uint256).max;
             for (uint256 i = 0; i < N_COINS; i++) {
-                if (amounts[i] > 0 && poolBalances[i] > 0) {
-                    uint256 ratio = amounts[i] * 1e18 / poolBalances[i];
+                uint256 balNorm = poolBalances[i] * muls[i];
+                if (amountsNorm[i] > 0 && balNorm > 0) {
+                    uint256 ratio = amountsNorm[i] * 1e18 / balNorm;
                     if (ratio < minRatio) minRatio = ratio;
                 }
             }
@@ -390,6 +397,16 @@ contract HybridPool is
     //  Internal StableSwap math
     // ─────────────────────────────────────────────
 
+    /// @dev Return precision multipliers to scale each token to 18 decimals.
+    ///      e.g. KRW (18 dec) → 1, USDC (6 dec) → 1e12.
+    ///      CR-5 fix: StableSwap invariant assumes equal-precision inputs.
+    function _precisionMultipliers() internal view returns (uint256[2] memory muls) {
+        for (uint256 k = 0; k < N_COINS; k++) {
+            uint8 dec = IERC20Metadata(tokens[k]).decimals();
+            muls[k] = 10 ** (18 - dec);
+        }
+    }
+
     /// @dev Compute D invariant using Newton's method (Curve StableSwap formula).
     function _getD(uint256[2] memory xp, uint256 amp) internal pure returns (uint256) {
         uint256 S = xp[0] + xp[1];
@@ -459,13 +476,21 @@ contract HybridPool is
     }
 
     /// @dev Calculate output amount using Curve StableSwap formula.
+    ///      CR-5 fix: normalise all balances and dx to 18 decimals before math,
+    ///      then denormalise the output back to token j's native decimals.
     function _calcSwapCurve(uint256 i, uint256 j, uint256 dx) internal view returns (uint256) {
-        uint256[2] memory xp = [poolBalances[0], poolBalances[1]];
+        uint256[2] memory muls = _precisionMultipliers();
+        uint256[2] memory xp;
+        xp[0] = poolBalances[0] * muls[0];
+        xp[1] = poolBalances[1] * muls[1];
         if (xp[0] == 0 || xp[1] == 0) return 0;
-        uint256 x = xp[i] + dx;
+
+        uint256 x = xp[i] + dx * muls[i];        // normalise dx to 18 dec
         uint256 y = _getY(i, j, x, xp);
         if (y >= xp[j]) return 0;
-        return xp[j] - y - 1; // subtract 1 for rounding safety
+
+        uint256 dyNorm = xp[j] - y - 1;           // 18-decimal output
+        return dyNorm / muls[j];                   // denormalise to token j decimals
     }
 
     /// @dev Calculate output amount using oracle price. Returns 0 if oracle unavailable.

@@ -66,9 +66,10 @@ contract InsuranceFund is
     {
         require(token  != address(0), "Zero address");
         require(amount > 0,           "Zero amount");
-        // Interactions before Effects (CEI: transfer first, then update state)
-        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+        // CEI: Effects before Interactions (IMP-3 fix — previously had transfer before state update)
         balances[pairId][token] += amount;
+        // Interactions
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
         emit Deposited(pairId, token, msg.sender, amount);
     }
 

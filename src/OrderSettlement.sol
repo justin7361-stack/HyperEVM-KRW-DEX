@@ -305,6 +305,12 @@ contract OrderSettlement is
 
         // 4. Require at least one entry succeeded
         require(collected > 0, "ADL: no funds collected");
+
+        // 5. CR-3 fix: deposit collected funds into InsuranceFund so they are tracked
+        //    and available for future cover() calls — was previously locked in this contract.
+        //    Requires: address(this) holds OPERATOR_ROLE on the InsuranceFund contract.
+        IERC20(quoteToken).forceApprove(insuranceFund, collected);
+        IInsuranceFundDeposit(insuranceFund).deposit(pairId, quoteToken, collected);
     }
 
     // ─────────────────────────────────────────────
