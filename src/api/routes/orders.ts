@@ -9,6 +9,8 @@ import type { Clients } from '../../chain/contracts.js'
 import type { Hex } from 'viem'
 import { MarginAccount } from '../../margin/MarginAccount.js'
 import type { CircuitBreaker } from '../../core/matching/CircuitBreaker.js'
+import type { Config } from '../../config/config.js'
+import type { WalletRateLimiter } from '../../core/matching/WalletRateLimiter.js'
 
 interface SubmitOrderBody {
   order:     Order
@@ -31,13 +33,15 @@ interface AmendBody {
 }
 
 export function ordersRoutes(
-  verifier:        IOrderVerifier,
-  policy:          PolicyEngine,
-  matching:        MatchingEngine,
-  store:           IOrderBookStore,
-  pairRegistry:    Clients['pairRegistry'],
-  marginAccount:   MarginAccount,
-  circuitBreaker?: CircuitBreaker,
+  verifier:           IOrderVerifier,
+  policy:             PolicyEngine,
+  matching:           MatchingEngine,
+  store:              IOrderBookStore,
+  pairRegistry:       Clients['pairRegistry'],
+  marginAccount:      MarginAccount,
+  circuitBreaker?:    CircuitBreaker,
+  walletRateLimiter?: WalletRateLimiter,
+  config?:            Pick<Config, 'walletRateLimitWindowMs'>,
 ) {
   return async function (fastify: FastifyInstance) {
     // POST /orders — submit a signed order
@@ -80,6 +84,7 @@ export function ordersRoutes(
             },
           },
           400: { type: 'object', properties: { error: { type: 'string' } } },
+          429: { type: 'object', properties: { error: { type: 'string' }, retryAfter: { type: 'integer' } } },
           503: { type: 'object', properties: { error: { type: 'string' } } },
         },
       },
@@ -98,6 +103,15 @@ export function ordersRoutes(
           : undefined,
       }
       const order = parsedOrder
+      const maker = order.maker
+
+      // 0. Per-wallet rate limit check
+      if (walletRateLimiter && !walletRateLimiter.isAllowed(maker)) {
+        return reply.status(429).send({
+          error: 'Too many orders — please slow down',
+          retryAfter: Math.ceil((config?.walletRateLimitWindowMs ?? 1000) / 1000),
+        })
+      }
 
       // 1. Expiry check
       const now = BigInt(Math.floor(Date.now() / 1000))

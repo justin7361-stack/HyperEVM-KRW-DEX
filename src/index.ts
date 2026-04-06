@@ -31,6 +31,7 @@ import { InsuranceFund }     from './core/insurance/InsuranceFund.js'
 import { InsuranceFundSyncer } from './core/insurance/InsuranceFundSyncer.js'
 import { MarginAccount }     from './margin/MarginAccount.js'
 import { CircuitBreaker }    from './core/matching/CircuitBreaker.js'
+import { WalletRateLimiter } from './core/matching/WalletRateLimiter.js'
 import { keccak256, encodePacked } from 'viem'
 import { settleFundingOnChain } from './chain/settleFundingOnChain.js'
 
@@ -82,6 +83,12 @@ const conditionalEngine = new ConditionalOrderEngine(
 )
 const expiryWorker = new ExpiryWorker(store)
 const traderKeyStore = new TraderKeyStore()
+
+// ── Per-wallet rate limiter ──────────────────────────────────────────────────
+const walletRateLimiter = new WalletRateLimiter({
+  maxRequests: config.walletRateLimitMax,
+  windowMs:    config.walletRateLimitWindowMs,
+})
 
 // ── Circuit Breaker ─────────────────────────────────────────────────────────
 const circuitBreaker = new CircuitBreaker({
@@ -247,6 +254,7 @@ const server = await buildServer({
   db,
   pubsub,
   circuitBreaker,
+  walletRateLimiter,
 })
 
 server.listen({ port: config.port, host: config.host }, (err) => {
@@ -254,6 +262,7 @@ server.listen({ port: config.port, host: config.host }, (err) => {
 })
 
 async function gracefulShutdown() {
+  walletRateLimiter.destroy()
   expiryWorker.stop()
   fundingEngine.stopAll()
   insuranceSyncer.stop()

@@ -59,6 +59,9 @@ export interface Config {
   // Circuit breaker config (optional)
   circuitBreakerPriceBandPct: number  // default 10 (10%)
   circuitBreakerWindowMs:     number  // default 60_000 (1 minute)
+  // Per-wallet order rate limiting
+  walletRateLimitMax:      number  // default 10 (orders per window)
+  walletRateLimitWindowMs: number  // default 1000 (1 second)
 }
 
 export function loadConfig(): Config {
@@ -88,6 +91,12 @@ export function loadConfig(): Config {
     ),
     circuitBreakerWindowMs: parseIntOrThrow(
       optionalEnv('CIRCUIT_BREAKER_WINDOW_MS', '60000'), 'CIRCUIT_BREAKER_WINDOW_MS'
+    ),
+    walletRateLimitMax: parseIntOrThrow(
+      optionalEnv('WALLET_RATE_LIMIT_MAX', '10'), 'WALLET_RATE_LIMIT_MAX'
+    ),
+    walletRateLimitWindowMs: parseIntOrThrow(
+      optionalEnv('WALLET_RATE_LIMIT_WINDOW_MS', '1000'), 'WALLET_RATE_LIMIT_WINDOW_MS'
     ),
   }
 }

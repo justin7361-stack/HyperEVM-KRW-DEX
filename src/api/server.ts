@@ -35,6 +35,7 @@ import type { IDatabase } from '../db/database.js'
 import type { IPubSub } from '../pubsub/RedisPubSub.js'
 import type { CircuitBreaker } from '../core/matching/CircuitBreaker.js'
 import { circuitBreakerAdminRoutes } from './routes/admin.js'
+import type { WalletRateLimiter } from '../core/matching/WalletRateLimiter.js'
 
 export async function buildServer(deps: {
   config:              Config
@@ -57,6 +58,7 @@ export async function buildServer(deps: {
   db?:                 IDatabase
   pubsub?:             IPubSub
   circuitBreaker?:     CircuitBreaker
+  walletRateLimiter?:  WalletRateLimiter
 }) {
   const { config, verifier, policy, matching, store, trades, pairRegistry, worker, blocklist } = deps
   const fastify = Fastify({ logger: true })
@@ -105,7 +107,7 @@ export async function buildServer(deps: {
   fastify.register(fastifyRateLimit, { max: 100, timeWindow: '1 minute' })
   fastify.register(fastifyWebSocket)
 
-  fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry, deps.marginAccount ?? new MarginAccount(), deps.circuitBreaker))
+  fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry, deps.marginAccount ?? new MarginAccount(), deps.circuitBreaker, deps.walletRateLimiter, deps.config))
   fastify.register(ordersBatchRoutes(verifier, policy, matching, pairRegistry))
   fastify.register(orderbookRoutes(matching))
   fastify.register(tradesRoutes(trades))
