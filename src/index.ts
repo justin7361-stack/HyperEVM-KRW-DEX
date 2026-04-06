@@ -104,7 +104,8 @@ circuitBreaker.on('resumed', (info: { pairId: string; resumedAt: number }) => {
 })
 
 // ── Margin account ──────────────────────────────────────────────────────────
-const marginAccount  = new MarginAccount()
+// IMP-8: inject positionTracker so MarginAccount reads positions from the single source of truth
+const marginAccount  = new MarginAccount(positionTracker)
 
 // ── Perp engines ────────────────────────────────────────────────────────────
 const markOracle     = new MarkPriceOracle()

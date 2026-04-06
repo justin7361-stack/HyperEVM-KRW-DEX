@@ -1,5 +1,6 @@
 import type { MarginPosition, MarginMode } from '../types/order.js'
 import type { Address } from 'viem'
+import type { PositionTracker } from '../core/position/PositionTracker.js'
 
 export interface MarginAccountState {
   maker:        Address
@@ -9,9 +10,23 @@ export interface MarginAccountState {
   positions:    MarginPosition[]
 }
 
+/**
+ * MarginAccount manages deposit/withdrawal balances for each maker.
+ *
+ * IMP-8 fix: Position state is no longer duplicated here.
+ * PositionTracker is the single source of truth for positions (size, margin, mode, entryPrice).
+ * MarginAccount reads from PositionTracker for getState() and canOpen() — no independent Map.
+ *
+ * Responsibilities:
+ *   - balances Map (deposit / withdrawal accounting)
+ *   - getState(): aggregates balance + positions from PositionTracker
+ *   - canOpen(): checks effective margin against PositionTracker positions
+ *   - applyPnl(): adjusts balance on settlement
+ */
 export class MarginAccount {
-  private readonly balances  = new Map<string, bigint>()
-  private readonly positions = new Map<string, MarginPosition>()
+  private readonly balances = new Map<string, bigint>()
+
+  constructor(private readonly positionTracker: PositionTracker) {}
 
   deposit(maker: Address, amount: bigint): void {
     const k = maker.toLowerCase()
@@ -26,15 +41,13 @@ export class MarginAccount {
     return true
   }
 
-  updatePosition(pos: MarginPosition): void {
-    this.positions.set(`${pos.maker.toLowerCase()}:${pos.pairId}`, { ...pos })
-  }
-
   getState(maker: Address): MarginAccountState {
     const k = maker.toLowerCase()
     const totalBalance = this.balances.get(k) ?? 0n
-    const positions    = [...this.positions.values()].filter(p => p.maker.toLowerCase() === k)
-    const usedMargin   = positions
+    // IMP-8: read positions from PositionTracker (single source of truth)
+    const positions  = this.positionTracker.getAll()
+      .filter(p => p.maker.toLowerCase() === k)
+    const usedMargin = positions
       .filter(p => p.mode === 'isolated')
       .reduce((sum, p) => sum + p.margin, 0n)
     return { maker, totalBalance, usedMargin, freeMargin: totalBalance - usedMargin, positions }

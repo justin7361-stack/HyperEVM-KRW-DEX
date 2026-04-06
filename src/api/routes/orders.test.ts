@@ -8,6 +8,7 @@ import type { IOrderBookStore } from '../../core/orderbook/IOrderBookStore.js'
 import type { StoredOrder } from '../../types/order.js'
 import type { Clients } from '../../chain/contracts.js'
 import { MarginAccount } from '../../margin/MarginAccount.js'
+import { PositionTracker } from '../../core/position/PositionTracker.js'
 
 // ── Mock dependencies ──────────────────────────────────────────────────────
 
@@ -29,7 +30,7 @@ const pairRegistry = {
   },
 } as unknown as Clients['pairRegistry']
 
-const defaultMarginAccount = new MarginAccount()
+const defaultMarginAccount = new MarginAccount(new PositionTracker())
 
 // ── Valid order fixture ────────────────────────────────────────────────────
 
@@ -186,7 +187,7 @@ describe('POST /orders — margin check', () => {
   }
 
   it('Perp order with insufficient margin returns 400', async () => {
-    const marginAccount = new MarginAccount()
+    const marginAccount = new MarginAccount(new PositionTracker())
     // deposit nothing — no margin available
 
     const fastify = Fastify({ logger: false })
@@ -210,7 +211,7 @@ describe('POST /orders — margin check', () => {
   })
 
   it('Perp order with sufficient margin returns 201', async () => {
-    const marginAccount = new MarginAccount()
+    const marginAccount = new MarginAccount(new PositionTracker())
     // price=1e18, amount=5e17, notional = 5e17*1e18/1e18 = 5e17, leverage=10 → reqMargin=5e16
     marginAccount.deposit(MAKER, 10n ** 18n)  // deposit 1 ETH equivalent — more than enough
 
@@ -234,7 +235,7 @@ describe('POST /orders — margin check', () => {
   })
 
   it('Spot order (no marginMode) skips margin check', async () => {
-    const marginAccount = new MarginAccount()
+    const marginAccount = new MarginAccount(new PositionTracker())
     // no margin deposited — but should not matter for spot orders
 
     const fastify = Fastify({ logger: false })
@@ -250,7 +251,7 @@ describe('POST /orders — margin check', () => {
   })
 
   it('Perp order without leverage field defaults to 1x (full notional required)', async () => {
-    const marginAccount = new MarginAccount()
+    const marginAccount = new MarginAccount(new PositionTracker())
     // price=1e18, amount=5e17 → notional=5e17, leverage defaults to 1n → reqMargin=5e17
     // deposit exactly 5e17 — should pass
     marginAccount.deposit(MAKER, 5n * 10n ** 17n)
@@ -275,7 +276,7 @@ describe('POST /orders — margin check', () => {
   })
 
   it('Perp order with leverage as JSON number (not string) is handled correctly', async () => {
-    const marginAccount = new MarginAccount()
+    const marginAccount = new MarginAccount(new PositionTracker())
     marginAccount.deposit(MAKER, 10n ** 18n)
 
     const fastify = Fastify({ logger: false })

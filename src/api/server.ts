@@ -25,7 +25,7 @@ import { TraderKeyStore, createTraderAuth, apiKeyManagementRoutes } from './auth
 import { candlesRoutes } from './routes/candles.js'
 import type { CandleStore } from '../core/candles/CandleStore.js'
 import type { ConditionalOrderEngine } from '../core/conditional/ConditionalOrderEngine.js'
-import type { PositionTracker } from '../core/position/PositionTracker.js'
+import { PositionTracker } from '../core/position/PositionTracker.js'
 import type { FundingRateEngine } from '../core/funding/FundingRateEngine.js'
 import { fundingRoutes } from './routes/funding.js'
 import { marginRoutes } from './routes/margin.js'
@@ -107,7 +107,7 @@ export async function buildServer(deps: {
   fastify.register(fastifyRateLimit, { max: 100, timeWindow: '1 minute' })
   fastify.register(fastifyWebSocket)
 
-  fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry, deps.marginAccount ?? new MarginAccount(), deps.circuitBreaker, deps.walletRateLimiter, deps.config))
+  fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry, deps.marginAccount ?? new MarginAccount(deps.positionTracker ?? new PositionTracker()), deps.circuitBreaker, deps.walletRateLimiter, deps.config))
   fastify.register(ordersBatchRoutes(verifier, policy, matching, pairRegistry))
   fastify.register(orderbookRoutes(matching))
   fastify.register(tradesRoutes(trades))
@@ -135,7 +135,7 @@ export async function buildServer(deps: {
   if (deps.positionTracker) {
     fastify.register(positionsRoutes(
       deps.positionTracker,
-      deps.marginAccount ?? new MarginAccount(),
+      deps.marginAccount ?? new MarginAccount(deps.positionTracker!),
       deps.getMarkPrice,
     ))
   }
