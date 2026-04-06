@@ -1,5 +1,28 @@
 export const ORDER_SETTLEMENT_ABI = [
   {
+    // OrderSettlement.settleFunding(FundingPayment[] payments, address reserve)
+    // Positive amount = maker receives from reserve; negative = maker pays into reserve.
+    // pairId = keccak256(abi.encodePacked(baseToken, quoteToken)) — bytes32.
+    name: 'settleFunding',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      {
+        name: 'payments',
+        type: 'tuple[]',
+        components: [
+          { name: 'maker',      type: 'address' },
+          { name: 'quoteToken', type: 'address' },
+          { name: 'amount',     type: 'int256'  },
+          { name: 'pairId',     type: 'bytes32' },
+          { name: 'timestamp',  type: 'uint256' },
+        ],
+      },
+      { name: 'reserve', type: 'address' },
+    ],
+    outputs: [],
+  },
+  {
     name: 'settleBatch',
     type: 'function',
     stateMutability: 'nonpayable',

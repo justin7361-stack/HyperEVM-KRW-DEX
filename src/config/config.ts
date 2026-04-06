@@ -50,6 +50,8 @@ export interface Config {
   redisUrl: string | undefined
   // O-7: Chainalysis API key for OFAC screening (optional)
   chainalysisApiKey: string | undefined
+  // N-3: Protocol reserve address for funding payments (optional — skips on-chain settlement if absent)
+  fundingReserveAddress: string | undefined
   // R-2: HashiCorp Vault (optional — leave blank for testnet/dev)
   vaultAddr?:     string
   vaultRoleId?:   string
@@ -74,6 +76,7 @@ export function loadConfig(): Config {
     databaseUrl:             process.env['DATABASE_URL'],
     redisUrl:                process.env['REDIS_URL'],
     chainalysisApiKey:       process.env['CHAINALYSIS_API_KEY'],
+    fundingReserveAddress:   process.env['FUNDING_RESERVE_ADDRESS'],
     vaultAddr:               process.env['VAULT_ADDR'],
     vaultRoleId:             process.env['VAULT_ROLE_ID'],
     vaultSecretId:           process.env['VAULT_SECRET_ID'],

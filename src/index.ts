@@ -31,6 +31,7 @@ import { InsuranceFund }     from './core/insurance/InsuranceFund.js'
 import { InsuranceFundSyncer } from './core/insurance/InsuranceFundSyncer.js'
 import { MarginAccount }     from './margin/MarginAccount.js'
 import { keccak256, encodePacked } from 'viem'
+import { settleFundingOnChain } from './chain/settleFundingOnChain.js'
 
 const config = loadConfig()
 
@@ -103,12 +104,19 @@ liquidationEngine.on('liquidation', (event) => {
   console.log(`[Liquidation] ${event.position.maker} on ${event.position.pairId} — ${event.reason}`)
 })
 
-// M-3: Wire up funding payment events (CR-4)
-// On-chain settleFunding() call will be added once the contract exposes the function (Phase N).
-// For now we log each payment so it's observable and not silently dropped.
+// N-3: Wire funding payment events to on-chain settleFunding().
+// FUNDING_RESERVE_ADDRESS is the protocol reserve that funds outgoing payments.
+// If absent (e.g. testnet/dev), payments are logged only.
 fundingEngine.on('payment', (p: import('./core/funding/FundingRateEngine.js').FundingPayment) => {
   console.log(`[Funding] payment maker=${p.maker} pair=${p.pairId} amount=${p.amount} rate=${p.rate}`)
-  // TODO(N-3): await walletClient.writeContract({ functionName: 'settleFunding', args: [...] })
+  if (config.fundingReserveAddress) {
+    void settleFundingOnChain(
+      walletClient,
+      config.orderSettlementAddress,
+      p,
+      config.fundingReserveAddress as `0x${string}`,
+    ).catch(err => console.error('[Funding] on-chain settlement error:', err))
+  }
 })
 
 const worker = new SettlementWorker({
