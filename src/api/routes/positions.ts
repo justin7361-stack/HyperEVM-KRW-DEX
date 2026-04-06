@@ -27,18 +27,20 @@ export function positionsRoutes(
       const marginState = marginAccount.getState(req.params.address as `0x${string}`)
 
       const result = makerPositions.map(p => {
-        const markPrice   = getMarkPrice ? getMarkPrice(p.pairId) : 0n
-        // unrealizedPnl: size > 0 = long → (markPrice - entryPrice) * size / 1e18
-        // For now we don't track entryPrice per-position, so we return 0
-        // Full P&L tracking requires MarginAccount.updatePosition() to store entryPrice
+        const markPrice = getMarkPrice ? getMarkPrice(p.pairId) : 0n
+        const absSize   = p.size < 0n ? -p.size : p.size
+        const pnl       = p.size > 0n
+          ? (markPrice - p.entryPrice) * absSize / (10n ** 18n)
+          : (p.entryPrice - markPrice) * absSize / (10n ** 18n)
         return {
           maker:            p.maker,
           pairId:           p.pairId,
           size:             p.size.toString(),
           margin:           p.margin.toString(),
           mode:             p.mode,
+          entryPrice:       p.entryPrice.toString(),
           markPrice:        markPrice.toString(),
-          unrealizedPnl:    '0',   // TODO: track entryPrice in MarginAccount
+          unrealizedPnl:    pnl.toString(),
         }
       })
 

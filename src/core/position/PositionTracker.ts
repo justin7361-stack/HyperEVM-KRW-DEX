@@ -6,9 +6,10 @@ const SCALE = 10n ** 18n
 
 /** Internal state per (maker, pairId) position. */
 interface PositionState {
-  size:   bigint     // positive = long, negative = short
-  margin: bigint     // estimated margin backing this position (scaled by 1e18)
-  mode:   MarginMode
+  size:       bigint     // positive = long, negative = short
+  margin:     bigint     // estimated margin backing this position (scaled by 1e18)
+  mode:       MarginMode
+  entryPrice: bigint     // weighted-average entry price (18-decimal, quote per base)
 }
 
 /**
@@ -39,7 +40,7 @@ export class PositionTracker {
     const makerDelta    = match.makerOrder.isBuy ? match.fillAmount : -match.fillAmount
     const makerMargin   = this._calcMarginDelta(notional, makerLeverage)
 
-    this._update(match.makerOrder.maker, pairId, makerDelta, makerMargin, makerMode)
+    this._update(match.makerOrder.maker, pairId, makerDelta, makerMargin, makerMode, match.price)
 
     // ── Taker side (CR-2: was completely absent) ─────────────────────────
     // Taker direction is always opposite to maker.
@@ -48,7 +49,7 @@ export class PositionTracker {
     const takerDelta    = -makerDelta   // opposite sign
     const takerMargin   = this._calcMarginDelta(notional, takerLeverage)
 
-    this._update(match.takerOrder.maker, pairId, takerDelta, takerMargin, takerMode)
+    this._update(match.takerOrder.maker, pairId, takerDelta, takerMargin, takerMode, match.price)
   }
 
   /**
@@ -69,6 +70,12 @@ export class PositionTracker {
    *  • Position decreases in same direction → reduce margin proportionally
    *  • Direction flip (e.g. long → short)   → reset margin based on new net size
    *  • Position reaches zero                 → clear margin
+   *
+   * Entry price (weighted average):
+   *  • New position (size was 0):              entryPrice = tradePrice
+   *  • Adding to same-direction position:      entryPrice = (prevSize * prevEntry + delta * tradePrice) / nextSize
+   *  • Reducing position (opposite direction): entryPrice unchanged
+   *  • Flipping direction:                     entryPrice = tradePrice
    */
   private _update(
     maker:       Address,
@@ -76,11 +83,13 @@ export class PositionTracker {
     sizeDelta:   bigint,
     marginDelta: bigint,
     mode:        MarginMode,
+    tradePrice:  bigint,
   ): void {
-    const k    = this.key(maker, pairId)
-    const cur  = this.pos.get(k)
-    const prev = cur?.size   ?? 0n
-    const pMgn = cur?.margin ?? 0n
+    const k          = this.key(maker, pairId)
+    const cur        = this.pos.get(k)
+    const prev       = cur?.size       ?? 0n
+    const pMgn       = cur?.margin     ?? 0n
+    const prevEntry  = cur?.entryPrice ?? 0n
 
     const next     = prev + sizeDelta
     const absPrev  = prev < 0n ? -prev : prev
@@ -88,31 +97,38 @@ export class PositionTracker {
     const absDelta = sizeDelta < 0n ? -sizeDelta : sizeDelta
 
     let nextMargin: bigint
+    let nextEntry:  bigint
 
     if (next === 0n) {
       // Position fully closed — remove entry from map to keep it clean
       this.pos.delete(k)
       return
     } else if (prev === 0n) {
-      // New position — use fill margin directly
+      // New position — use fill margin and trade price directly
       nextMargin = marginDelta
+      nextEntry  = tradePrice
     } else if ((prev > 0n) === (next > 0n)) {
       // Same direction
       if (absNext > absPrev) {
-        // Growing: add margin
+        // Growing: add margin; weighted-average entry price
         nextMargin = pMgn + marginDelta
+        nextEntry  = absNext > 0n
+          ? (absPrev * prevEntry + absDelta * tradePrice) / absNext
+          : tradePrice
       } else {
-        // Shrinking: reduce margin proportionally
+        // Shrinking: reduce margin proportionally; entry price unchanged
         nextMargin = absPrev > 0n ? (pMgn * absNext) / absPrev : 1n
+        nextEntry  = prevEntry
       }
     } else {
       // Direction flipped (e.g. long 10 → short 5 after selling 15)
-      // New margin ≈ fill margin * (new net size / fill size)
+      // New margin ≈ fill margin * (new net size / fill size); entry price resets to trade price
       nextMargin = absDelta > 0n ? (marginDelta * absNext) / absDelta : marginDelta
+      nextEntry  = tradePrice
     }
 
     // Guard: keep at least 1n margin for open positions (prevents false liquidation trigger)
-    this.pos.set(k, { size: next, margin: nextMargin > 0n ? nextMargin : 1n, mode })
+    this.pos.set(k, { size: next, margin: nextMargin > 0n ? nextMargin : 1n, mode, entryPrice: nextEntry })
     // Note: next===0n case is handled above (early return with map.delete)
   }
 
@@ -139,7 +155,7 @@ export class PositionTracker {
       const colonIdx = key.indexOf(':')
       const maker    = key.slice(0, colonIdx) as Address
       const pairId   = key.slice(colonIdx + 1)
-      return { maker, pairId, size: state.size, margin: state.margin, mode: state.mode }
+      return { maker, pairId, size: state.size, margin: state.margin, mode: state.mode, entryPrice: state.entryPrice }
     })
   }
 }

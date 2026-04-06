@@ -6,11 +6,12 @@ const PAIR = 'ETH/KRW'
 
 function makePosition(overrides: Partial<MarginPosition> = {}): MarginPosition {
   return {
-    maker:  '0xAABB',
-    pairId: PAIR,
-    size:   10n * 10n ** 18n,   // 10 ETH long
-    margin: 1000n,
-    mode:   'isolated',
+    maker:      '0xAABB',
+    pairId:     PAIR,
+    size:       10n * 10n ** 18n,   // 10 ETH long
+    margin:     1000n,
+    mode:       'isolated',
+    entryPrice: 0n,
     ...overrides,
   }
 }

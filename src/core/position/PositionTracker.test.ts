@@ -202,3 +202,74 @@ describe('PositionTracker — CR-1: getAll() margin > 0n', () => {
     expect(pos?.mode).toBe('isolated')
   })
 })
+
+describe('PositionTracker — entryPrice tracking', () => {
+  let tracker: PositionTracker
+  beforeEach(() => { tracker = new PositionTracker() })
+
+  it('new position sets entryPrice to tradePrice', () => {
+    const tradePrice = 200n * 10n ** 18n
+    tracker.onMatch(PAIR, match(true, FILL_1E18, tradePrice))
+
+    const pos = tracker.getAll().find(p => p.maker.toLowerCase() === MAKER.toLowerCase())
+    expect(pos).toBeDefined()
+    expect(pos!.entryPrice).toBe(tradePrice)
+  })
+
+  it('increasing position uses weighted average entryPrice', () => {
+    // First fill: 10 units at price 100
+    const price1 = 100n * 10n ** 18n
+    const fill1  = 10n  * 10n ** 18n
+    tracker.onMatch(PAIR, match(true, fill1, price1))
+
+    // Second fill: 10 units at price 200
+    const price2 = 200n * 10n ** 18n
+    const fill2  = 10n  * 10n ** 18n
+    tracker.onMatch(PAIR, match(true, fill2, price2))
+
+    // Expected weighted avg: (10 * 100 + 10 * 200) / 20 = 150
+    const expected = 150n * 10n ** 18n
+    const pos = tracker.getAll().find(p => p.maker.toLowerCase() === MAKER.toLowerCase())
+    expect(pos).toBeDefined()
+    expect(pos!.entryPrice).toBe(expected)
+  })
+
+  it('reducing position leaves entryPrice unchanged', () => {
+    const openPrice  = 100n * 10n ** 18n
+    const closePrice = 200n * 10n ** 18n
+    // Open: buy 10 units at price 100
+    tracker.onMatch(PAIR, match(true, FILL_1E18, openPrice))
+    // Reduce: sell 5 units at price 200 (partial close)
+    tracker.onMatch(PAIR, match(false, FILL_1E18 / 2n, closePrice))
+
+    const pos = tracker.getAll().find(p => p.maker.toLowerCase() === MAKER.toLowerCase())
+    expect(pos).toBeDefined()
+    // entryPrice must remain at open price, not change on reduction
+    expect(pos!.entryPrice).toBe(openPrice)
+  })
+
+  it('position flip resets entryPrice to new tradePrice', () => {
+    const openPrice = 100n * 10n ** 18n
+    const flipPrice = 300n * 10n ** 18n
+    // Open long: buy 5 units at price 100
+    const halfFill = FILL_1E18 / 2n
+    tracker.onMatch(PAIR, match(true, halfFill, openPrice))
+    // Flip to short: sell 10 units at price 300 (flips direction)
+    tracker.onMatch(PAIR, match(false, FILL_1E18, flipPrice))
+
+    // Maker had long 5, now sold 10 → short 5 (flipped)
+    const pos = tracker.getAll().find(p => p.maker.toLowerCase() === MAKER.toLowerCase())
+    expect(pos).toBeDefined()
+    expect(pos!.size).toBeLessThan(0n)           // now short
+    expect(pos!.entryPrice).toBe(flipPrice)      // entry reset to flip price
+  })
+
+  it('taker entryPrice is also set correctly on new position', () => {
+    const tradePrice = 150n * 10n ** 18n
+    tracker.onMatch(PAIR, match(true, FILL_1E18, tradePrice))
+
+    const takerPos = tracker.getAll().find(p => p.maker.toLowerCase() === TAKER.toLowerCase())
+    expect(takerPos).toBeDefined()
+    expect(takerPos!.entryPrice).toBe(tradePrice)
+  })
+})

@@ -13,11 +13,12 @@ function makeOracle(markPrice: bigint): MarkPriceOracle {
 
 function makePosition(overrides: Partial<MarginPosition> = {}): MarginPosition {
   return {
-    maker:  '0xABCD' as `0x${string}`,
-    pairId: PAIR,
-    size:   1n * 10n ** 18n,   // 1 ETH long
-    margin: 100n,
-    mode:   'isolated',
+    maker:      '0xABCD' as `0x${string}`,
+    pairId:     PAIR,
+    size:       1n * 10n ** 18n,   // 1 ETH long
+    margin:     100n,
+    mode:       'isolated',
+    entryPrice: 0n,
     ...overrides,
   }
 }
@@ -212,11 +213,12 @@ describe('LiquidationEngine.selectADLTargets (G-4)', () => {
 
   function makePos(overrides: Partial<MarginPosition> = {}): MarginPosition {
     return {
-      maker:  '0xAABB' as `0x${string}`,
-      pairId: PAIR,
-      size:   1n * 10n ** 18n,
-      margin: 100n * 10n ** 18n,
-      mode:   'isolated',
+      maker:      '0xAABB' as `0x${string}`,
+      pairId:     PAIR,
+      size:       1n * 10n ** 18n,
+      margin:     100n * 10n ** 18n,
+      mode:       'isolated',
+      entryPrice: 0n,
       ...overrides,
     }
   }

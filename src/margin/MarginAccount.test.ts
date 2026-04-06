@@ -31,11 +31,12 @@ describe('MarginAccount', () => {
     acct.deposit(MAKER, 1000n)
 
     acct.updatePosition({
-      maker:  MAKER,
-      pairId: PAIR,
-      size:   1n * 10n ** 18n,
-      margin: 200n,
-      mode:   'isolated',
+      maker:      MAKER,
+      pairId:     PAIR,
+      size:       1n * 10n ** 18n,
+      margin:     200n,
+      mode:       'isolated',
+      entryPrice: 0n,
     })
 
     const state = acct.getState(MAKER)
@@ -52,7 +53,7 @@ describe('MarginAccount', () => {
     expect(acct.canOpen(MAKER, 'isolated', 1001n)).toBe(false)
 
     // After using some margin
-    acct.updatePosition({ maker: MAKER, pairId: PAIR, size: 1n, margin: 300n, mode: 'isolated' })
+    acct.updatePosition({ maker: MAKER, pairId: PAIR, size: 1n, margin: 300n, mode: 'isolated', entryPrice: 0n })
     // freeMargin = 700
     expect(acct.canOpen(MAKER, 'isolated', 700n)).toBe(true)
     expect(acct.canOpen(MAKER, 'isolated', 701n)).toBe(false)
@@ -71,7 +72,7 @@ describe('MarginAccount', () => {
       const account = new MarginAccount()
       account.deposit('0xbbbb' as Address, 1000n)
       // Lock 400n in isolated position
-      account.updatePosition({ maker: '0xbbbb' as Address, pairId: 'ETH/KRW', size: 1n, margin: 400n, mode: 'isolated' })
+      account.updatePosition({ maker: '0xbbbb' as Address, pairId: 'ETH/KRW', size: 1n, margin: 400n, mode: 'isolated', entryPrice: 0n })
       // freeMargin = 1000 - 400 = 600
       expect(account.canOpen('0xbbbb' as Address, 'isolated', 600n)).toBe(true)
       expect(account.canOpen('0xbbbb' as Address, 'isolated', 601n)).toBe(false)
