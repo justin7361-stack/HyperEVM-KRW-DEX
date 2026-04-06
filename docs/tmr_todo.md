@@ -77,55 +77,98 @@
 
 ## 🔴 다음 작업: Phase Q 테스트넷 배포
 
-### 배포 전 체크리스트
-- [ ] HyperEVM testnet 계정 준비 (DEPLOYER_PRIVATE_KEY, ADMIN_ADDRESS 등)
-- [ ] .env 파일 작성 (krw-dex-contracts/.env)
+### ✅ Claude가 준비 완료한 파일들 (커밋 `950b0de`)
+- `script/DeployTestnet.s.sol` — 원클릭 배포 스크립트 (deploy + config + pair등록 + 토큰민팅 합산)
+- `railway.toml` — Railway 배포 설정
+- `docker-compose.yml` + `Dockerfile` — 셀프호스팅용
+- `.env.example` 업데이트 — 신규 환경변수 포함
+- `traefik/dynamic/middlewares.yml` — API 게이트웨이 설정
 
-```bash
-DEPLOYER_PRIVATE_KEY=0x...
-ADMIN_ADDRESS=0x...
-OPERATOR_ADDRESS=0x...        # 서버 운영 지갑
-GUARDIAN_ADDRESS=0x...        # 긴급 pause 권한 지갑
-USDC_ADDRESS=                 # 테스트넷 USDC (없으면 MockERC20 자동 배포)
-USDT_ADDRESS=                 # 테스트넷 USDT (없으면 skip)
-ADMIN_PRIVATE_KEY=0x...       # Config.s.sol용 admin 키
+---
+
+## 🙋 사용자 직접 실행 필요
+
+### Q-1: HYPE 테스트넷 토큰 확보 (선행 필수)
+```
+1. https://faucet.hyperliquid-testnet.xyz 에서 HYPE 토큰 받기
+2. Deployer 지갑 + Operator 지갑 모두 HYPE 필요
+   (gas fee용: 각 0.1 HYPE면 충분)
 ```
 
-### 배포 순서
+### Q-2: 컨트랙트 배포 (forge)
 ```bash
-# 1. 컨트랙트 빌드
 cd krw-dex-contracts
+
+# 1. .env.testnet 작성
+cp .env.testnet.example .env.testnet
+# DEPLOYER_PRIVATE_KEY, OPERATOR_ADDRESS, GUARDIAN_ADDRESS 입력
+
+# 2. 빌드 확인
 ~/.foundry/bin/forge build
 
-# 2. 배포 (9개 컨트랙트)
-~/.foundry/bin/forge script script/Deploy.s.sol \
-  --rpc-url https://rpc.hyperliquid-testnet.xyz/evm \
-  --broadcast --verify
-# 출력된 주소들을 .env에 기록
-
-# 3. 설정 (역할 부여 + 청산 수수료 설정)
-~/.foundry/bin/forge script script/Config.s.sol \
+# 3. 배포 (single script: deploy + config + pair등록 + 토큰민팅)
+source .env.testnet
+~/.foundry/bin/forge script script/DeployTestnet.s.sol \
   --rpc-url https://rpc.hyperliquid-testnet.xyz/evm \
   --broadcast
+
+# 4. 출력된 주소들을 krw-dex-server/.env 와 krw-dex-web/.env.local에 복사
+#    스크립트가 "=== .env COPY-PASTE ===" 형식으로 출력해줌
 ```
 
-### 서버 환경변수 (.env) 작성 후
+### Q-3: 서버 배포 — Railway (권장) 또는 Docker
+**Railway:**
 ```bash
 cd krw-dex-server
-cp .env.example .env
-# 배포된 주소 입력
-
-npm run build
-npm start
-# 로그에서 확인:
-# [Startup] Loaded N pair(s) from PairRegistry
-# InsuranceFundSyncer isRunning=true
+railway login
+railway init          # 프로젝트 연결
+# Railway 대시보드에서 .env.example 변수 모두 설정
+# PostgreSQL add-on 추가 → DATABASE_URL 자동 설정
+# Redis add-on 추가 → REDIS_URL 자동 설정
+railway up
 ```
 
-### E2E 검증
-1. 테스트 지갑 2개로 매수/매도 주문 제출
-2. SettlementWorker가 `settleBatch()` txn 발행 확인
-3. `OrderFilled` 이벤트 온체인 확인
+**Docker (셀프호스팅):**
+```bash
+cd krw-dex-server
+cp .env.example .env   # 주소 채워넣기
+docker compose up -d   # postgres + redis + traefik + server 모두 시작
+```
+
+### Q-4: Traefik TLS 설정 (Docker 셀프호스팅 시)
+```bash
+# ACME_EMAIL, API_DOMAIN 환경변수 설정 후 docker compose up
+# Let's Encrypt 자동 발급 (포트 80/443 열려있어야 함)
+```
+
+### Q-5: 프론트엔드 배포 — Vercel
+```bash
+cd krw-dex-web
+# .env.local에 배포된 컨트랙트 주소 + API URL 입력
+vercel deploy --prod
+# 또는 GitHub 연동 → 자동 배포
+```
+
+### Q-6: MetaMask E2E 검증
+```
+1. MetaMask에 HyperEVM Testnet 추가
+   - RPC: https://rpc.hyperliquid-testnet.xyz/evm
+   - Chain ID: 998
+   - Symbol: HYPE
+2. 배포된 프론트엔드에서:
+   a. 지갑 연결
+   b. MockKRW approve → depositMargin
+   c. 매수 주문 제출 (EIP-712 서명)
+   d. 다른 지갑으로 매도 주문 제출
+   e. 체결 확인 → PositionPanel 업데이트 확인
+   f. HyperEVM explorer에서 OrderFilled 이벤트 확인
+```
+
+### Q-7: WalletConnect Project ID 발급 (선택, RainbowKit용)
+```
+1. https://cloud.walletconnect.com 에서 프로젝트 생성 (무료)
+2. Project ID를 krw-dex-web/.env.local의 VITE_WALLETCONNECT_PROJECT_ID에 입력
+```
 
 ---
 

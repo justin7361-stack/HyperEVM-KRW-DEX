@@ -1,0 +1,28 @@
+##
+## HyperKRW DEX Server — Railway Deployment Config (Q-3)
+##
+## Usage:
+##   1. railway login
+##   2. railway init     (link to Railway project)
+##   3. Set env vars in Railway dashboard (same as .env.example)
+##   4. railway up       (deploy)
+##
+## Railway auto-provisions PostgreSQL + Redis as add-ons.
+## Set DATABASE_URL and REDIS_URL from the add-on connection strings.
+##
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+# Build args to include optional deps (postgres + ioredis) in production image
+buildArgs = { WITH_POSTGRES = "1", WITH_REDIS = "1" }
+
+[deploy]
+startCommand = "node dist/index.js"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Minimum resources for testnet (bump for mainnet)
+# numReplicas = 1    # increase to 2-3 for HA (Redis pub/sub handles multi-instance)
