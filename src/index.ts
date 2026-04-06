@@ -6,6 +6,10 @@ import { EIP712Verifier } from './verification/EIP712Verifier.js'
 import { PolicyEngine } from './compliance/PolicyEngine.js'
 import { BasicBlocklistPlugin } from './compliance/plugins/BasicBlocklistPlugin.js'
 import { GeoBlockPlugin } from './compliance/plugins/GeoBlockPlugin.js'
+import { OFACPlugin } from './compliance/plugins/OFACPlugin.js'
+import { auditLog } from './audit/AuditLog.js'
+import { createDatabase } from './db/database.js'
+import { createPubSub } from './pubsub/RedisPubSub.js'
 import { MemoryOrderBookStore } from './core/orderbook/MemoryOrderBookStore.js'
 import { MatchingEngine } from './core/matching/MatchingEngine.js'
 import { SettlementWorker } from './core/settlement/SettlementWorker.js'
@@ -28,6 +32,13 @@ import { MarginAccount }     from './margin/MarginAccount.js'
 import { keccak256, encodePacked } from 'viem'
 
 const config = loadConfig()
+
+// O-1: PostgreSQL persistence (no-op NullDatabase if DATABASE_URL not set)
+const db = await createDatabase(config.databaseUrl)
+
+// O-2: Redis pub/sub (LocalPubSub EventEmitter fallback if REDIS_URL not set)
+const pubsub = await createPubSub(config.redisUrl)
+
 const { publicClient, pairRegistry } = createClients(config)
 const { walletClient } = createOperatorWallet(config)
 
@@ -52,6 +63,8 @@ const matching  = new MatchingEngine(store, feeEngine, positionTracker)
 const blocklist = new BasicBlocklistPlugin(new Set())
 policy.register(blocklist)
 policy.register(new GeoBlockPlugin(new Set(config.blockedCountries)))
+// O-7: OFAC sanctions screening (two-layer: local SDN set + optional Chainalysis API)
+policy.register(new OFACPlugin({ chainalysisApiKey: config.chainalysisApiKey }))
 
 const candleStore = new CandleStore()
 const conditionalEngine = new ConditionalOrderEngine(
@@ -110,6 +123,18 @@ matching.on('matched', (match) => {
   positionTracker.onMatch(pairId, match)
   candleStore.onTrade(pairId, tradeRecord)
   trades.add(pairId, tradeRecord)
+  // O-1: Persist trade to PostgreSQL (no-op if DATABASE_URL not set)
+  void db.saveTrade(tradeRecord)
+  // O-7: Audit trail
+  auditLog.orderMatched(match.makerOrder.maker, match.takerOrder.maker, match.makerOrder.id, pairId, match.fillAmount, match.price)
+  // O-2: Broadcast trade event via pub/sub (Redis or local EventEmitter)
+  void pubsub.publish('trade', pairId, {
+    pairId,
+    price:        match.price.toString(),
+    amount:       match.fillAmount.toString(),
+    isBuyerMaker: match.makerOrder.isBuy,
+    tradedAt:     match.matchedAt,
+  })
 })
 
 matching.on('price', (pairId: string, price: bigint) => {
@@ -201,6 +226,9 @@ async function gracefulShutdown() {
   watcher.stop()
   worker.stop()
   await server.close()
+  // O-1/O-2: Close DB and pub/sub connections
+  await db.close()
+  await pubsub.close()
   process.exit(0)
 }
 

@@ -1,0 +1,131 @@
+##
+## HyperKRW DEX — Docker Compose (O-6)
+##
+## Usage:
+##   cp .env.example .env        # fill in your values
+##   docker compose up -d
+##
+## Services:
+##   server    — krw-dex-server (Node.js matching engine + REST/WS API)
+##   postgres  — PostgreSQL 16 (persistence, optional)
+##   redis     — Redis 7 (pub/sub + rate-limit counters, optional)
+##   traefik   — API gateway: TLS termination, rate-limiting, reverse proxy
+##
+## Scaling:
+##   docker compose up -d --scale server=3
+##   (Multiple server instances share state via Redis pub/sub + PostgreSQL)
+##
+
+version: "3.9"
+
+services:
+  # ── Matching Engine / API Server ────────────────────────────────────────────
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Required
+      RPC_URL:                    ${RPC_URL}
+      CHAIN_ID:                   ${CHAIN_ID}
+      OPERATOR_PRIVATE_KEY:       ${OPERATOR_PRIVATE_KEY}
+      ORDER_SETTLEMENT_ADDRESS:   ${ORDER_SETTLEMENT_ADDRESS}
+      PAIR_REGISTRY_ADDRESS:      ${PAIR_REGISTRY_ADDRESS}
+      ORACLE_ADMIN_ADDRESS:       ${ORACLE_ADMIN_ADDRESS}
+      ADMIN_API_KEY:              ${ADMIN_API_KEY}
+      # Optional — O-4 viem fallback RPC
+      RPC_URL_FALLBACK:           ${RPC_URL_FALLBACK:-}
+      # Optional — O-1 PostgreSQL persistence
+      DATABASE_URL:               ${DATABASE_URL:-postgresql://krwdex:${POSTGRES_PASSWORD:-secret}@postgres:5432/krwdex}
+      # Optional — O-2 Redis pub/sub
+      REDIS_URL:                  ${REDIS_URL:-redis://redis:6379}
+      # Optional — O-7 Chainalysis OFAC screening
+      CHAINALYSIS_API_KEY:        ${CHAINALYSIS_API_KEY:-}
+      # Server tuning
+      PORT:                       3000
+      HOST:                       0.0.0.0
+      BATCH_TIMEOUT_MS:           ${BATCH_TIMEOUT_MS:-1000}
+      BATCH_SIZE:                 ${BATCH_SIZE:-10}
+      BLOCKED_COUNTRIES:          ${BLOCKED_COUNTRIES:-KP,IR,SY,CU}
+    expose:
+      - "3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      # Traefik routing
+      - "traefik.enable=true"
+      - "traefik.http.routers.server.rule=Host(`${API_DOMAIN:-api.hyperkrw.xyz}`)"
+      - "traefik.http.routers.server.entrypoints=websecure"
+      - "traefik.http.routers.server.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.server.middlewares=api-ratelimit@file,security-headers@file"
+      - "traefik.http.services.server.loadbalancer.server.port=3000"
+      # WebSocket support
+      - "traefik.http.routers.server-ws.rule=Host(`${API_DOMAIN:-api.hyperkrw.xyz}`) && PathPrefix(`/ws`)"
+      - "traefik.http.routers.server-ws.entrypoints=websecure"
+      - "traefik.http.routers.server-ws.tls.certresolver=letsencrypt"
+      - "traefik.http.services.server-ws.loadbalancer.server.port=3000"
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     krwdex
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+      POSTGRES_DB:       krwdex
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U krwdex -d krwdex"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Traefik API Gateway ───────────────────────────────────────────────────────
+  traefik:
+    image: traefik:v3.0
+    restart: unless-stopped
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@hyperkrw.xyz}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--api.dashboard=false"
+      - "--log.level=INFO"
+      - "--accesslog=true"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+
+volumes:
+  postgres_data:
+  redis_data:
+  letsencrypt:

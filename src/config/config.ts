@@ -31,6 +31,8 @@ function requireHex(key: string): Hex {
 
 export interface Config {
   rpcUrl: string
+  // O-4: optional secondary RPC for fallback transport (Alchemy → public RPC)
+  rpcUrlFallback: string | undefined
   chainId: number
   operatorPrivateKey: Hex
   orderSettlementAddress: Address
@@ -42,11 +44,18 @@ export interface Config {
   batchSize: number
   blockedCountries: string[]
   adminApiKey: string
+  // O-1: PostgreSQL connection string (optional — skips persistence if absent)
+  databaseUrl: string | undefined
+  // O-2: Redis URL (optional — skips pub/sub if absent)
+  redisUrl: string | undefined
+  // O-7: Chainalysis API key for OFAC screening (optional)
+  chainalysisApiKey: string | undefined
 }
 
 export function loadConfig(): Config {
   return {
     rpcUrl:                  requireEnv('RPC_URL'),
+    rpcUrlFallback:          process.env['RPC_URL_FALLBACK'],
     chainId:                 parseIntOrThrow(requireEnv('CHAIN_ID'), 'CHAIN_ID'),
     operatorPrivateKey:      requireHex('OPERATOR_PRIVATE_KEY'),
     orderSettlementAddress:  requireAddress('ORDER_SETTLEMENT_ADDRESS'),
@@ -58,5 +67,8 @@ export function loadConfig(): Config {
     batchSize:               parseIntOrThrow(optionalEnv('BATCH_SIZE', '10'), 'BATCH_SIZE'),
     blockedCountries:        optionalEnv('BLOCKED_COUNTRIES', 'KP,IR,SY,CU').split(','),
     adminApiKey:             requireEnv('ADMIN_API_KEY'),
+    databaseUrl:             process.env['DATABASE_URL'],
+    redisUrl:                process.env['REDIS_URL'],
+    chainalysisApiKey:       process.env['CHAINALYSIS_API_KEY'],
   }
 }

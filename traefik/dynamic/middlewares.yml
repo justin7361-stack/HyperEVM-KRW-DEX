@@ -1,0 +1,76 @@
+##
+## Traefik Dynamic Configuration — O-5: Middlewares & Security Headers
+##
+## Reference: https://doc.traefik.io/traefik/middlewares/
+## Pattern:   dYdX v4 API gateway (Kong) → Traefik equivalent for testnet
+##
+## Loaded automatically by Traefik via --providers.file.directory
+##
+
+http:
+  middlewares:
+
+    # ── Rate Limiting ──────────────────────────────────────────────────────────
+    # 100 req/s per IP (burst 50), backed by in-memory token bucket.
+    # Production: use Redis-backed rate limiting (Traefik Enterprise or Kong).
+    api-ratelimit:
+      rateLimit:
+        average: 100
+        burst:   50
+        period:  1s
+        sourceCriterion:
+          ipStrategy:
+            depth: 1       # trust first hop (X-Forwarded-For[0])
+
+    # ── Security Headers ───────────────────────────────────────────────────────
+    # Minimal set matching Hyperliquid-style open API (no browser UI served here).
+    security-headers:
+      headers:
+        # Prevent MIME-type sniffing
+        contentTypeNosniff: true
+        # Block embedding in iframes
+        frameDeny: true
+        # Enable HSTS (1 year, include subdomains)
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        # Remove server version header
+        customResponseHeaders:
+          X-Powered-By: ""
+          Server: ""
+        # CORS — allow any origin (public DEX API)
+        accessControlAllowMethods:
+          - GET
+          - POST
+          - DELETE
+          - OPTIONS
+        accessControlAllowHeaders:
+          - "Content-Type"
+          - "X-API-Key"
+          - "Authorization"
+        accessControlAllowOriginList:
+          - "*"
+        accessControlMaxAge: 86400
+
+    # ── Admin IP Allowlist ─────────────────────────────────────────────────────
+    # Restrict /admin/* to operator IPs only.
+    # Add your operator IP(s) here before going to mainnet.
+    admin-allowlist:
+      ipAllowList:
+        sourceRange:
+          - "127.0.0.1/32"      # localhost (for local dev)
+          # - "203.0.113.10/32"  # operator server IP (uncomment & replace)
+
+  routers:
+    # Admin routes — protected by IP allowlist (applied via label in docker-compose
+    # or add an explicit router here for /admin prefix).
+    admin:
+      rule: "PathPrefix(`/admin`)"
+      entryPoints:
+        - websecure
+      middlewares:
+        - admin-allowlist
+        - security-headers
+      service: server
+      tls:
+        certResolver: letsencrypt
