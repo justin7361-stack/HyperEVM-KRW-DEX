@@ -1,7 +1,7 @@
 # HyperKRW DEX — Session Todo
 
-**마지막 업데이트:** 2026-04-02
-**현재 상태:** 테스트넷 배포 전 필수 작업 완료 → D-1 배포 준비 완료
+**마지막 업데이트:** 2026-04-06
+**현재 상태:** Phase M/N/P/O 완료 → Phase Q (테스트넷 배포) 준비 완료
 
 ---
 
@@ -29,7 +29,53 @@
 
 ---
 
-## 🔴 다음 작업: D-1 테스트넷 배포
+## ✅ 완료 — Phase M (서버 크리티컬 버그)
+
+| 태스크 | 커밋 | 내용 |
+|-------|------|-----|
+| M-1 CR-1: PositionTracker margin=0n | 이전 세션 | PositionState {size, margin, mode} 구조로 변경 |
+| M-2 CR-2: taker 포지션 미추적 | 이전 세션 | onMatch()에서 maker+taker 모두 업데이트 |
+| M-3 CR-4: FundingEngine payment 이벤트 연결 | 이전 세션 | fundingEngine.on('payment') 콘솔 로깅 (온체인 연결 TODO) |
+| M-4 IMP-7: SIGINT 핸들러 추가 | 이전 세션 | gracefulShutdown() 리팩터, SIGTERM+SIGINT 모두 처리 |
+
+## ✅ 완료 — Phase N (컨트랙트 크리티컬 버그)
+
+| 태스크 | 커밋 | 내용 |
+|-------|------|-----|
+| N-1 CR-3: settleADL 자금 InsuranceFund 전송 | 이전 세션 | collected → IInsuranceFundDeposit.deposit() 호출 |
+| N-2 CR-5: HybridPool decimal 정규화 | 이전 세션 | _precisionMultipliers() + xp 정규화, forge test 132/132 |
+| N-3 IMP-3: InsuranceFund CEI 수정 | 이전 세션 | Effects(state) → Interactions(transferFrom) 순서 보정 |
+
+## ✅ 완료 — Phase P (프론트엔드 버그)
+
+| 태스크 | 커밋 | 내용 |
+|-------|------|-----|
+| P-1: AccountPage approve 플로우 | 이전 세션 | approveWrite + allowance read krwAddr로 수정 |
+| P-2: MarginForm 에러 표시 | 이전 세션 | approveError, marginError 렌더링 |
+| P-3: window.innerWidth → useMediaQuery | 이전 세션 | src/hooks/useMediaQuery.ts 신규, MediaQueryList 이벤트 |
+| P-4: keyRole 타입 정렬 | 이전 세션 | 'read'\|'trade' (서버와 일치), ApiKeyModal 수정 |
+| P-5: Toast 피드백 시스템 | 이전 세션 | src/components/ui/Toast.tsx, CSS 애니메이션, alert() 제거 |
+| P-6: 청산 거리 방향 수정 | 이전 세션 | isLong prop, Long: markPrice-liqPrice, Short: 반전 |
+
+## ✅ 완료 — Phase O (인프라)
+
+| 태스크 | 커밋 | 내용 |
+|-------|------|-----|
+| O-1: PostgreSQL 스키마+DB | `d808f6e` | src/db/schema.sql, database.ts, IDatabase, NullDatabase, PostgresDatabase |
+| O-2: Redis WS pub/sub | `d808f6e` | src/pubsub/RedisPubSub.ts, IPubSub, LocalPubSub, RedisPubSubImpl |
+| O-4: viem fallback RPC | `d808f6e` | contracts.ts fallback([primary, secondary]), config.rpcUrlFallback |
+| O-5: Traefik 게이트웨이 | `d808f6e` | traefik/dynamic/middlewares.yml (rate-limit 100/s, security headers, admin allowlist) |
+| O-6: Docker Compose | `d808f6e` | docker-compose.yml (server+postgres+redis+traefik), Dockerfile 멀티스테이지 |
+| O-7: OFAC+AuditLog | `d808f6e` | OFACPlugin(로컬SDN+Chainalysis), AuditLog(구조화 JSON), index.ts 연결 |
+
+**주의사항:**
+- `postgres`/`ioredis` 는 선택적 런타임 dep — `npm install postgres ioredis` 실행해야 사용 가능
+- Docker Compose는 `WITH_POSTGRES=1 WITH_REDIS=1` 빌드 인자로 optional dep 자동 설치
+- O-3 (Ponder 인덱서)는 별도 서비스, 미구현 — Phase Q 배포 후 필요 시 추가
+
+---
+
+## 🔴 다음 작업: Phase Q 테스트넷 배포
 
 ### 배포 전 체크리스트
 - [ ] HyperEVM testnet 계정 준비 (DEPLOYER_PRIVATE_KEY, ADMIN_ADDRESS 등)
