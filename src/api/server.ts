@@ -31,6 +31,8 @@ import { positionsRoutes } from './routes/positions.js'
 import { MarginAccount } from '../margin/MarginAccount.js'
 import type { IDatabase } from '../db/database.js'
 import type { IPubSub } from '../pubsub/RedisPubSub.js'
+import type { CircuitBreaker } from '../core/matching/CircuitBreaker.js'
+import { circuitBreakerAdminRoutes } from './routes/admin.js'
 
 export function buildServer(deps: {
   config:              Config
@@ -52,6 +54,7 @@ export function buildServer(deps: {
   marginAccount?:      MarginAccount
   db?:                 IDatabase
   pubsub?:             IPubSub
+  circuitBreaker?:     CircuitBreaker
 }) {
   const { config, verifier, policy, matching, store, trades, pairRegistry, worker, blocklist } = deps
   const fastify = Fastify({ logger: true })
@@ -60,11 +63,17 @@ export function buildServer(deps: {
   fastify.register(fastifyRateLimit, { max: 100, timeWindow: '1 minute' })
   fastify.register(fastifyWebSocket)
 
-  fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry, deps.marginAccount ?? new MarginAccount()))
+  fastify.register(ordersRoutes(verifier, policy, matching, store, pairRegistry, deps.marginAccount ?? new MarginAccount(), deps.circuitBreaker))
   fastify.register(ordersBatchRoutes(verifier, policy, matching, pairRegistry))
   fastify.register(orderbookRoutes(matching))
   fastify.register(tradesRoutes(trades))
-  fastify.register(streamRoutes(matching, trades))
+  fastify.register(streamRoutes(
+    matching,
+    trades,
+    deps.getMarkPrice  ?? (() => 0n),
+    deps.getIndexPrice ?? (() => 0n),
+    deps.fundingEngine,
+  ))
 
   if (deps.candleStore) fastify.register(candlesRoutes(deps.candleStore))
 
@@ -84,6 +93,11 @@ export function buildServer(deps: {
       deps.marginAccount ?? new MarginAccount(),
       deps.getMarkPrice,
     ))
+  }
+
+  // Circuit breaker admin endpoints
+  if (deps.circuitBreaker) {
+    fastify.register(circuitBreakerAdminRoutes(deps.circuitBreaker, config.adminApiKey))
   }
 
   // Admin dashboard static files + admin API routes (optional in tests)

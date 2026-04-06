@@ -8,6 +8,7 @@ import type { Order, StoredOrder } from '../../types/order.js'
 import type { Clients } from '../../chain/contracts.js'
 import type { Hex } from 'viem'
 import { MarginAccount } from '../../margin/MarginAccount.js'
+import type { CircuitBreaker } from '../../core/matching/CircuitBreaker.js'
 
 interface SubmitOrderBody {
   order:     Order
@@ -30,12 +31,13 @@ interface AmendBody {
 }
 
 export function ordersRoutes(
-  verifier:      IOrderVerifier,
-  policy:        PolicyEngine,
-  matching:      MatchingEngine,
-  store:         IOrderBookStore,
-  pairRegistry:  Clients['pairRegistry'],
-  marginAccount: MarginAccount,
+  verifier:        IOrderVerifier,
+  policy:          PolicyEngine,
+  matching:        MatchingEngine,
+  store:           IOrderBookStore,
+  pairRegistry:    Clients['pairRegistry'],
+  marginAccount:   MarginAccount,
+  circuitBreaker?: CircuitBreaker,
 ) {
   return async function (fastify: FastifyInstance) {
     // POST /orders — submit a signed order
@@ -108,7 +110,13 @@ export function ordersRoutes(
         }
       }
 
-      // 6. Store and match
+      // 6. Circuit breaker check
+      const pairId = `${order.baseToken}/${order.quoteToken}`
+      if (circuitBreaker?.isHalted(pairId)) {
+        return reply.status(503).send({ error: `Trading halted for ${pairId}` })
+      }
+
+      // 7. Store and match
       const stored: StoredOrder = {
         ...order,
         id:           uuid(),
@@ -119,7 +127,6 @@ export function ordersRoutes(
         makerIp,
       }
 
-      const pairId = `${order.baseToken}/${order.quoteToken}`
       await matching.submitOrder(stored, pairId)
 
       return reply.status(201).send({ orderId: stored.id })

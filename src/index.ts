@@ -30,6 +30,7 @@ import { MarkPriceOracle }   from './core/oracle/MarkPriceOracle.js'
 import { InsuranceFund }     from './core/insurance/InsuranceFund.js'
 import { InsuranceFundSyncer } from './core/insurance/InsuranceFundSyncer.js'
 import { MarginAccount }     from './margin/MarginAccount.js'
+import { CircuitBreaker }    from './core/matching/CircuitBreaker.js'
 import { keccak256, encodePacked } from 'viem'
 import { settleFundingOnChain } from './chain/settleFundingOnChain.js'
 
@@ -81,6 +82,19 @@ const conditionalEngine = new ConditionalOrderEngine(
 )
 const expiryWorker = new ExpiryWorker(store)
 const traderKeyStore = new TraderKeyStore()
+
+// ── Circuit Breaker ─────────────────────────────────────────────────────────
+const circuitBreaker = new CircuitBreaker({
+  priceBandPct: config.circuitBreakerPriceBandPct,
+  windowMs:     config.circuitBreakerWindowMs,
+})
+
+circuitBreaker.on('halted', (info: { pairId: string; reason: string; haltedAt: number }) => {
+  console.warn(`[CircuitBreaker] HALTED ${info.pairId}: ${info.reason} at ${new Date(info.haltedAt).toISOString()}`)
+})
+circuitBreaker.on('resumed', (info: { pairId: string; resumedAt: number }) => {
+  console.log(`[CircuitBreaker] RESUMED ${info.pairId} at ${new Date(info.resumedAt).toISOString()}`)
+})
 
 // ── Margin account ──────────────────────────────────────────────────────────
 const marginAccount  = new MarginAccount()
@@ -156,6 +170,8 @@ matching.on('matched', (match) => {
 matching.on('price', (pairId: string, price: bigint) => {
   void conditionalEngine.onPrice(pairId, price)
   markOracle.onTrade(pairId, { price, tradedAt: Date.now() })
+  // Feed execution price to circuit breaker for auto-trip detection
+  circuitBreaker.recordPrice(pairId, price)
 })
 
 worker.on('settled', (_batch, txHash) => console.log('Settled:', txHash))
@@ -230,6 +246,7 @@ const server = buildServer({
   getIndexPrice: (pair: string) => markOracle.getIndexPrice(pair),
   db,
   pubsub,
+  circuitBreaker,
 })
 
 server.listen({ port: config.port, host: config.host }, (err) => {

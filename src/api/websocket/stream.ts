@@ -4,6 +4,10 @@ import type { MatchResult } from '../../types/order.js'
 import type { TradeStore } from '../routes/trades.js'
 import type { WebSocket } from '@fastify/websocket'
 import type { FastifyRequest } from 'fastify'
+import type { FundingRateEngine } from '../../core/funding/FundingRateEngine.js'
+
+const MARK_PRICE_INTERVAL_MS = 5_000
+const FUNDING_INTERVAL_MS    = 30_000
 
 function serializeMatch(match: MatchResult) {
   return {
@@ -15,7 +19,13 @@ function serializeMatch(match: MatchResult) {
   }
 }
 
-export function streamRoutes(matching: MatchingEngine, tradeStore: TradeStore) {
+export function streamRoutes(
+  matching:       MatchingEngine,
+  tradeStore:     TradeStore,
+  getMarkPrice:   (pairId: string) => bigint,
+  getIndexPrice:  (pairId: string) => bigint,
+  fundingEngine?: FundingRateEngine,
+) {
   return async function (fastify: FastifyInstance) {
     fastify.get('/stream', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
       // Client specifies pair via query param: /stream?pair=BASE/QUOTE
@@ -39,6 +49,42 @@ export function streamRoutes(matching: MatchingEngine, tradeStore: TradeStore) {
           },
         }))
       })
+
+      // Send markprice.update immediately on connect
+      if (socket.readyState === socket.OPEN) {
+        const price = getMarkPrice(pairId)
+        const index = getIndexPrice(pairId)
+        socket.send(JSON.stringify({
+          type: 'markprice.update',
+          data: {
+            pairId,
+            markPrice:  price.toString(),
+            indexPrice: index.toString(),
+            ts: Date.now(),
+          },
+        }))
+      }
+
+      // Send funding.update immediately on connect
+      if (fundingEngine && socket.readyState === socket.OPEN) {
+        const markPrice  = getMarkPrice(pairId)
+        const indexPrice = getIndexPrice(pairId)
+        const funding    = fundingEngine.computeRate(markPrice, indexPrice)
+        const rateScaled = BigInt(Math.round(funding.rate * 1e18))
+        const nowSec     = Math.floor(Date.now() / 1000)
+        const nextFundingAt = Math.ceil(nowSec / (8 * 3600)) * (8 * 3600)
+        socket.send(JSON.stringify({
+          type: 'funding.update',
+          data: {
+            pairId,
+            rate:         rateScaled.toString(),
+            markPrice:    markPrice.toString(),
+            indexPrice:   indexPrice.toString(),
+            nextFundingAt,
+            ts: Date.now(),
+          },
+        }))
+      }
 
       // Stream live matches as trade events + order status updates
       const onMatched = (match: MatchResult) => {
@@ -86,6 +132,46 @@ export function streamRoutes(matching: MatchingEngine, tradeStore: TradeStore) {
 
       matching.on('matched', onMatched)
 
+      // --- Mark price periodic push (every 5s) ---
+      const markPriceInterval = setInterval(() => {
+        if (socket.readyState !== socket.OPEN) return
+        const price = getMarkPrice(pairId)
+        const index = getIndexPrice(pairId)
+        socket.send(JSON.stringify({
+          type: 'markprice.update',
+          data: {
+            pairId,
+            markPrice:  price.toString(),
+            indexPrice: index.toString(),
+            ts: Date.now(),
+          },
+        }))
+      }, MARK_PRICE_INTERVAL_MS)
+
+      // --- Funding rate periodic push (every 30s) ---
+      const fundingInterval = fundingEngine
+        ? setInterval(() => {
+            if (socket.readyState !== socket.OPEN) return
+            const markPrice  = getMarkPrice(pairId)
+            const indexPrice = getIndexPrice(pairId)
+            const funding    = fundingEngine.computeRate(markPrice, indexPrice)
+            const rateScaled = BigInt(Math.round(funding.rate * 1e18))
+            const nowSec     = Math.floor(Date.now() / 1000)
+            const nextFundingAt = Math.ceil(nowSec / (8 * 3600)) * (8 * 3600)
+            socket.send(JSON.stringify({
+              type: 'funding.update',
+              data: {
+                pairId,
+                rate:         rateScaled.toString(),
+                markPrice:    markPrice.toString(),
+                indexPrice:   indexPrice.toString(),
+                nextFundingAt,
+                ts: Date.now(),
+              },
+            }))
+          }, FUNDING_INTERVAL_MS)
+        : null
+
       // --- Heartbeat ---
       const PING_INTERVAL_MS = 30_000
       const PONG_TIMEOUT_MS  = 10_000
@@ -111,6 +197,8 @@ export function streamRoutes(matching: MatchingEngine, tradeStore: TradeStore) {
 
       socket.on('close', () => {
         matching.off('matched', onMatched)
+        clearInterval(markPriceInterval)
+        if (fundingInterval) clearInterval(fundingInterval)
         clearInterval(pingInterval)
         if (pongTimer) { clearTimeout(pongTimer); pongTimer = null }
       })

@@ -56,6 +56,9 @@ export interface Config {
   vaultAddr?:     string
   vaultRoleId?:   string
   vaultSecretId?: string
+  // Circuit breaker config (optional)
+  circuitBreakerPriceBandPct: number  // default 10 (10%)
+  circuitBreakerWindowMs:     number  // default 60_000 (1 minute)
 }
 
 export function loadConfig(): Config {
@@ -80,5 +83,11 @@ export function loadConfig(): Config {
     vaultAddr:               process.env['VAULT_ADDR'],
     vaultRoleId:             process.env['VAULT_ROLE_ID'],
     vaultSecretId:           process.env['VAULT_SECRET_ID'],
+    circuitBreakerPriceBandPct: parseIntOrThrow(
+      optionalEnv('CIRCUIT_BREAKER_PRICE_BAND_PCT', '10'), 'CIRCUIT_BREAKER_PRICE_BAND_PCT'
+    ),
+    circuitBreakerWindowMs: parseIntOrThrow(
+      optionalEnv('CIRCUIT_BREAKER_WINDOW_MS', '60000'), 'CIRCUIT_BREAKER_WINDOW_MS'
+    ),
   }
 }
