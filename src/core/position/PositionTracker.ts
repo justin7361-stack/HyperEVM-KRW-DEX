@@ -1,22 +1,123 @@
-import type { MatchResult } from '../../types/order.js'
+import type { MatchResult, MarginMode, MarginPosition } from '../../types/order.js'
+import type { Address } from 'viem'
 
-// Tracks net baseToken position per (maker, pairId).
-// Positive = long (net buyer), Negative = short (net seller).
+// 1e18 scaling factor — all price/amount values are 18-decimal scaled
+const SCALE = 10n ** 18n
+
+/** Internal state per (maker, pairId) position. */
+interface PositionState {
+  size:   bigint     // positive = long, negative = short
+  margin: bigint     // estimated margin backing this position (scaled by 1e18)
+  mode:   MarginMode
+}
+
+/**
+ * Tracks net base-token positions and estimated margins per (maker, pairId).
+ *
+ * Fixes:
+ *  CR-1 — getAll() was returning margin=0n for every position, making all positions
+ *          immediately eligible for liquidation. Now computes margin from fill price + leverage.
+ *  CR-2 — onMatch() was only updating the maker side. Now updates both maker and taker.
+ */
 export class PositionTracker {
-  private readonly pos = new Map<string, bigint>()
+  private readonly pos = new Map<string, PositionState>()
 
   private key(maker: string, pairId: string): string {
     return `${maker.toLowerCase()}:${pairId}`
   }
 
   onMatch(pairId: string, match: MatchResult): void {
-    const k = this.key(match.makerOrder.maker, pairId)
-    const cur = this.pos.get(k) ?? 0n
-    this.pos.set(k, match.makerOrder.isBuy ? cur + match.fillAmount : cur - match.fillAmount)
+    // Notional value of the fill in quote-token units (18-decimal).
+    // price=0n means market order — fall back to fillAmount as notional approximation.
+    const notional = match.price > 0n
+      ? (match.fillAmount * match.price) / SCALE
+      : match.fillAmount
+
+    // ── Maker side ──────────────────────────────────────────────────────────
+    const makerLeverage = match.makerOrder.leverage ?? 1n
+    const makerMode     = match.makerOrder.marginMode ?? 'cross'
+    const makerDelta    = match.makerOrder.isBuy ? match.fillAmount : -match.fillAmount
+    const makerMargin   = this._calcMarginDelta(notional, makerLeverage)
+
+    this._update(match.makerOrder.maker, pairId, makerDelta, makerMargin, makerMode)
+
+    // ── Taker side (CR-2: was completely absent) ─────────────────────────
+    // Taker direction is always opposite to maker.
+    const takerLeverage = match.takerOrder.leverage ?? 1n
+    const takerMode     = match.takerOrder.marginMode ?? 'cross'
+    const takerDelta    = -makerDelta   // opposite sign
+    const takerMargin   = this._calcMarginDelta(notional, takerLeverage)
+
+    this._update(match.takerOrder.maker, pairId, takerDelta, takerMargin, takerMode)
+  }
+
+  /**
+   * Compute margin contribution from a fill.
+   * margin = notional / leverage, minimum 1n to ensure non-zero.
+   */
+  private _calcMarginDelta(notional: bigint, leverage: bigint): bigint {
+    if (leverage <= 0n) leverage = 1n
+    const m = notional / leverage
+    return m > 0n ? m : 1n
+  }
+
+  /**
+   * Update position state for one side of a match.
+   *
+   * Margin accounting:
+   *  • Position increases in same direction → add margin proportionally
+   *  • Position decreases in same direction → reduce margin proportionally
+   *  • Direction flip (e.g. long → short)   → reset margin based on new net size
+   *  • Position reaches zero                 → clear margin
+   */
+  private _update(
+    maker:       Address,
+    pairId:      string,
+    sizeDelta:   bigint,
+    marginDelta: bigint,
+    mode:        MarginMode,
+  ): void {
+    const k    = this.key(maker, pairId)
+    const cur  = this.pos.get(k)
+    const prev = cur?.size   ?? 0n
+    const pMgn = cur?.margin ?? 0n
+
+    const next     = prev + sizeDelta
+    const absPrev  = prev < 0n ? -prev : prev
+    const absNext  = next < 0n ? -next : next
+    const absDelta = sizeDelta < 0n ? -sizeDelta : sizeDelta
+
+    let nextMargin: bigint
+
+    if (next === 0n) {
+      // Position fully closed — remove entry from map to keep it clean
+      this.pos.delete(k)
+      return
+    } else if (prev === 0n) {
+      // New position — use fill margin directly
+      nextMargin = marginDelta
+    } else if ((prev > 0n) === (next > 0n)) {
+      // Same direction
+      if (absNext > absPrev) {
+        // Growing: add margin
+        nextMargin = pMgn + marginDelta
+      } else {
+        // Shrinking: reduce margin proportionally
+        nextMargin = absPrev > 0n ? (pMgn * absNext) / absPrev : 1n
+      }
+    } else {
+      // Direction flipped (e.g. long 10 → short 5 after selling 15)
+      // New margin ≈ fill margin * (new net size / fill size)
+      nextMargin = absDelta > 0n ? (marginDelta * absNext) / absDelta : marginDelta
+    }
+
+    // Guard: keep at least 1n margin for open positions (prevents false liquidation trigger)
+    this.pos.set(k, { size: next, margin: nextMargin > 0n ? nextMargin : 1n, mode })
+    // Note: next===0n case is handled above (early return with map.delete)
   }
 
   getPosition(maker: string, pairId: string): bigint {
-    return this.pos.get(this.key(maker, pairId)) ?? 0n
+    return this.pos.get(this.key(maker, pairId))?.size ?? 0n
   }
 
   // Returns true if a reduce-only order is valid:
@@ -27,13 +128,18 @@ export class PositionTracker {
     return isBuy ? (p < 0n && -p >= amount) : (p > 0n && p >= amount)
   }
 
-  /** Returns all tracked positions as MarginPosition-compatible records for liquidation checks. */
-  getAll(): import('../../types/order.js').MarginPosition[] {
-    return [...this.pos.entries()].map(([key, size]) => {
+  /**
+   * Returns all tracked positions as MarginPosition records for liquidation checks.
+   *
+   * CR-1 fix: margin field is now the estimated actual margin (was always 0n before).
+   * Positions with margin=0n would cause LiquidationEngine to flag them all immediately.
+   */
+  getAll(): MarginPosition[] {
+    return [...this.pos.entries()].map(([key, state]) => {
       const colonIdx = key.indexOf(':')
-      const maker    = key.slice(0, colonIdx) as import('viem').Hex
+      const maker    = key.slice(0, colonIdx) as Address
       const pairId   = key.slice(colonIdx + 1)
-      return { maker, pairId, size, margin: 0n, mode: 'cross' as const }
+      return { maker, pairId, size: state.size, margin: state.margin, mode: state.mode }
     })
   }
 }

@@ -35,7 +35,7 @@ describe('MatchingEngine — Reduce-Only (G-7)', () => {
 
     // Manually seed long position for MAKER_A: simulate 10 units long
     // by injecting directly (PositionTracker is stateful via onMatch)
-    ;(tracker as any).pos.set(`${MAKER_A.toLowerCase()}:${PAIR}`, 10n)
+    ;(tracker as any).pos.set(`${MAKER_A.toLowerCase()}:${PAIR}`, { size: 10n, margin: 1000n, mode: 'cross' })
 
     const rejections: string[] = []
     engine.on('rejected', (_id: string, reason: string) => rejections.push(reason))
@@ -76,7 +76,7 @@ describe('MatchingEngine — Reduce-Only (G-7)', () => {
     const engine  = new MatchingEngine(store, undefined, tracker)
 
     // MAKER_A is SHORT — reduce-only sell should be rejected (would increase exposure)
-    ;(tracker as any).pos.set(`${MAKER_A.toLowerCase()}:${PAIR}`, -10n)
+    ;(tracker as any).pos.set(`${MAKER_A.toLowerCase()}:${PAIR}`, { size: -10n, margin: 1000n, mode: 'cross' })
 
     const rejections: string[] = []
     engine.on('rejected', (_id: string, reason: string) => rejections.push(reason))
@@ -95,7 +95,7 @@ describe('MatchingEngine — Reduce-Only (G-7)', () => {
     const engine  = new MatchingEngine(store, undefined, tracker)
 
     // Long position is only 5, but reduce-only order is for 10
-    ;(tracker as any).pos.set(`${MAKER_A.toLowerCase()}:${PAIR}`, 5n)
+    ;(tracker as any).pos.set(`${MAKER_A.toLowerCase()}:${PAIR}`, { size: 5n, margin: 500n, mode: 'cross' })
 
     const rejections: string[] = []
     engine.on('rejected', (_id: string, reason: string) => rejections.push(reason))
@@ -119,7 +119,7 @@ describe('MatchingEngine — Reduce-Only (G-7)', () => {
     }))
 
     // MAKER_A is SHORT 10 units
-    ;(tracker as any).pos.set(`${MAKER_A.toLowerCase()}:${PAIR}`, -10n)
+    ;(tracker as any).pos.set(`${MAKER_A.toLowerCase()}:${PAIR}`, { size: -10n, margin: 1000n, mode: 'cross' })
 
     const rejections: string[] = []
     engine.on('rejected', (_id: string, reason: string) => rejections.push(reason))
