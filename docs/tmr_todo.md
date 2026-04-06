@@ -77,12 +77,18 @@
 
 ## 🔴 다음 작업: Phase Q 테스트넷 배포
 
-### ✅ Claude가 준비 완료한 파일들 (커밋 `950b0de`)
+### ✅ Claude가 준비 완료한 파일들 (커밋 `950b0de`, `ecc4634`, contracts `a915918`)
 - `script/DeployTestnet.s.sol` — 원클릭 배포 스크립트 (deploy + config + pair등록 + 토큰민팅 합산)
+- `script/SetupTimelock.s.sol` — R-4: TimelockController (48h 업그레이드 딜레이) 배포 + admin 이전
 - `railway.toml` — Railway 배포 설정
-- `docker-compose.yml` + `Dockerfile` — 셀프호스팅용
-- `.env.example` 업데이트 — 신규 환경변수 포함
+- `docker-compose.yml` + `Dockerfile` — 셀프호스팅용 (indexer 서비스 포함)
+- `src/db/init-indexer-db.sql` — krwdex_indexer DB 초기화
+- `.env.example` 업데이트 — INSURANCE_FUND_ADDRESS, START_BLOCK 포함
 - `traefik/dynamic/middlewares.yml` — API 게이트웨이 설정
+- `krw-dex-indexer/` (신규 레포) — Ponder 인덱서 (O-3):
+  - ponder.config.ts, ponder.schema.ts, src/{OrderSettlement,InsuranceFund,OracleAdmin,PairRegistry}.ts
+  - 8개 테이블 (Trade, Liquidation, FundingSettlement, AdlEvent, InsuranceFundDeposit/Cover, MarkPrice, Pair)
+  - docker-compose.yml의 `indexer` 서비스로 통합됨
 
 ---
 
