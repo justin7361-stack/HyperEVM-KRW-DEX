@@ -33,10 +33,27 @@ contract FeeCollector is
     ///         Does not reflect raw ERC20 balance if tokens are accidentally sent directly.
     mapping(address => uint256) public accumulatedFees;
 
+    /// @notice Broker fees accumulated per broker per token (S-2-2 — Orderly pattern).
+    /// @dev    Separate from protocol fees. Brokers withdraw their own portion independently.
+    mapping(address => mapping(address => uint256)) public brokerFees;
+
     /// @notice Emitted when fees are deposited by a trusted caller.
     /// @param token  ERC20 token address.
     /// @param amount Amount deposited (18 decimals for KRW stablecoins; native decimals otherwise).
     event FeeDeposited(address indexed token, uint256 amount);
+
+    /// @notice Emitted when broker fees are deposited by a trusted caller.
+    /// @param broker Broker address credited.
+    /// @param token  ERC20 token address.
+    /// @param amount Amount deposited.
+    event BrokerFeeDeposited(address indexed broker, address indexed token, uint256 amount);
+
+    /// @notice Emitted when a broker withdraws their accumulated fees.
+    /// @param broker Broker address.
+    /// @param token  ERC20 token address.
+    /// @param to     Recipient address.
+    /// @param amount Amount withdrawn.
+    event BrokerFeeWithdrawn(address indexed broker, address indexed token, address indexed to, uint256 amount);
 
     /// @notice Emitted when the admin withdraws accumulated fees.
     /// @param token  ERC20 token address.
@@ -94,6 +111,42 @@ contract FeeCollector is
         accumulatedFees[token] -= amount;  // Effect before Interaction
         IERC20(token).safeTransfer(to, amount);
         emit FeeWithdrawn(token, to, amount);
+    }
+
+    /// @notice Deposit fees on behalf of a broker (S-2-2 — Orderly pattern).
+    /// @dev    Only DEPOSITOR_ROLE. Caller must pre-approve this contract for `amount`.
+    ///         CEI: state updated before external transfer. ReentrancyGuard protected.
+    /// @param broker Broker address to credit (must be non-zero).
+    /// @param token  ERC20 token address (must be non-zero).
+    /// @param amount Amount to deposit (must be > 0).
+    function depositBrokerFee(address broker, address token, uint256 amount)
+        external
+        onlyRole(DEPOSITOR_ROLE)
+        nonReentrant
+    {
+        require(broker != address(0), "Zero address");
+        require(token  != address(0), "Zero address");
+        require(amount > 0,           "Zero amount");
+        brokerFees[broker][token] += amount;                              // Effect
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount); // Interaction
+        emit BrokerFeeDeposited(broker, token, amount);
+    }
+
+    /// @notice Broker withdraws their accumulated fees. Self-service — no admin required.
+    /// @dev    CEI: state updated before transfer. ReentrancyGuard protected.
+    /// @param token  ERC20 token to withdraw.
+    /// @param to     Recipient address (must be non-zero).
+    /// @param amount Amount to withdraw (must be > 0 and ≤ brokerFees[msg.sender][token]).
+    function withdrawBrokerFee(address token, address to, uint256 amount)
+        external
+        nonReentrant
+    {
+        require(to     != address(0),                    "Zero address");
+        require(amount > 0,                              "Zero amount");
+        require(brokerFees[msg.sender][token] >= amount, "Insufficient broker fees");
+        brokerFees[msg.sender][token] -= amount;         // Effect
+        IERC20(token).safeTransfer(to, amount);          // Interaction
+        emit BrokerFeeWithdrawn(msg.sender, token, to, amount);
     }
 
     function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}

@@ -54,6 +54,15 @@ contract OracleAdmin is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     /// @notice Latest mark prices per trading pair (keccak256 of pair string).
     mapping(bytes32 => MarkPrice)   public markPrices;
 
+    /// @notice Orderbook state root snapshot (S-2-1 — Lighter pattern).
+    struct OrderbookRoot {
+        bytes32 root;       // keccak256 of the deterministically-sorted open orderbook
+        uint256 timestamp;  // Block timestamp of last submission
+    }
+
+    /// @notice Latest orderbook state root per trading pair.
+    mapping(bytes32 => OrderbookRoot) public orderbookRoots;
+
     /// @notice Emitted when an operator proposes a new rate for a token.
     /// @param token       Token whose rate is being updated.
     /// @param price       Proposed new price (18 decimals).
@@ -74,6 +83,13 @@ contract OracleAdmin is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     /// @param token Token being initialized.
     /// @param price Initial price (18 decimals).
     event RateInitialized(address indexed token, uint256 price);
+
+    /// @notice Emitted when the operator posts an orderbook state root on-chain (Lighter pattern).
+    /// @dev    Enables off-chain audit trail and dispute resolution without storing full orderbook.
+    /// @param pairId    Trading pair identifier.
+    /// @param root      keccak256 of the sorted open orderbook state.
+    /// @param timestamp Block timestamp of submission.
+    event OrderbookRootPosted(bytes32 indexed pairId, bytes32 root, uint256 timestamp);
 
     /// @notice Emitted when the mark price for a trading pair is posted.
     /// @param pairId    Trading pair identifier (keccak256 of pair string, e.g. keccak256("ETH/KRW")).
@@ -202,6 +218,28 @@ contract OracleAdmin is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         mp.price     = price;
         mp.timestamp = block.timestamp;
         emit MarkPricePosted(pairId, price, block.timestamp);
+    }
+
+    /// @notice Post the current keccak256 state root of the off-chain orderbook (S-2-1 — Lighter pattern).
+    /// @dev    Provides an on-chain audit trail without storing full orderbook state.
+    ///         Only OPERATOR_ROLE may post. root must be non-zero.
+    ///         Clients and auditors can verify off-chain orderbook integrity by recomputing
+    ///         the root from the server's open-order snapshot and comparing against this value.
+    /// @param pairId keccak256(abi.encodePacked(baseToken, quoteToken)).
+    /// @param root   keccak256 of the deterministically-sorted open orderbook state.
+    function postOrderbookRoot(bytes32 pairId, bytes32 root) external onlyRole(OPERATOR_ROLE) {
+        require(root != bytes32(0), "empty root");
+        orderbookRoots[pairId] = OrderbookRoot(root, block.timestamp);
+        emit OrderbookRootPosted(pairId, root, block.timestamp);
+    }
+
+    /// @notice Get the latest orderbook state root for a pair.
+    /// @param pairId Trading pair identifier.
+    /// @return root      Latest keccak256 state root (bytes32(0) if never posted).
+    /// @return timestamp Block timestamp of last post (0 if never posted).
+    function getOrderbookRoot(bytes32 pairId) external view returns (bytes32 root, uint256 timestamp) {
+        OrderbookRoot memory r = orderbookRoots[pairId];
+        return (r.root, r.timestamp);
     }
 
     /// @notice Get the latest posted mark price for a pair.

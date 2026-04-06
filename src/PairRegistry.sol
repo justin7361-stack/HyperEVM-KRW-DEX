@@ -51,6 +51,11 @@ contract PairRegistry is Initializable, AccessControlUpgradeable, UUPSUpgradeabl
     /// @dev    Append-only. Used by getAllPairIds() for off-chain enumeration.
     bytes32[] public pairIds;
 
+    /// @notice Broker fee rate per trading pair in basis points (S-2-2 — Orderly pattern).
+    /// @dev    0 = no broker fee. Max 100 bps (1%). Brokers are identified per-order;
+    ///         the fee is computed server-side and routed via FeeCollector.depositBrokerFee().
+    mapping(bytes32 => uint256) public brokerFeeRateBps;
+
     /// @notice Emitted when a new trading pair is registered.
     /// @param pairId     keccak256(abi.encodePacked(baseToken, quoteToken)).
     /// @param baseToken  Base token address.
@@ -69,6 +74,11 @@ contract PairRegistry is Initializable, AccessControlUpgradeable, UUPSUpgradeabl
     /// @notice Emitted when a token is removed from the whitelist.
     /// @param token The removed token address.
     event TokenRemoved(address indexed token);
+
+    /// @notice Emitted when a pair's broker fee rate is updated (S-2-2).
+    /// @param pairId Trading pair identifier.
+    /// @param feeBps New broker fee rate in basis points.
+    event BrokerFeeRateUpdated(bytes32 indexed pairId, uint256 feeBps);
 
     /// @notice Emitted when the KRW stablecoin address is updated.
     /// @param newAddress New KRW stablecoin contract address.
@@ -183,6 +193,25 @@ contract PairRegistry is Initializable, AccessControlUpgradeable, UUPSUpgradeabl
         Pair      memory p = pairs[pid];
         TokenInfo memory t = tokens[baseToken];
         return p.active && t.whitelisted && !t.feeOnTransfer && !t.rebase;
+    }
+
+    /// @notice Set the broker fee rate for a trading pair (S-2-2 — Orderly pattern).
+    /// @dev    Only OPERATOR_ROLE. Max 100 bps (1%) to prevent fee abuse.
+    ///         Setting feeBps = 0 disables broker fees for the pair.
+    /// @param pairId  Trading pair identifier (must already exist).
+    /// @param feeBps  Fee in basis points (0–100).
+    function setBrokerFeeRate(bytes32 pairId, uint256 feeBps) external onlyRole(OPERATOR_ROLE) {
+        require(pairs[pairId].baseToken != address(0), "Pair not found");
+        require(feeBps <= 100, "Max 100 bps");
+        brokerFeeRateBps[pairId] = feeBps;
+        emit BrokerFeeRateUpdated(pairId, feeBps);
+    }
+
+    /// @notice Get the broker fee rate for a pair.
+    /// @param pairId Trading pair identifier.
+    /// @return feeBps Broker fee rate in basis points (0 if not set or disabled).
+    function getBrokerFeeRate(bytes32 pairId) external view returns (uint256 feeBps) {
+        return brokerFeeRateBps[pairId];
     }
 
     /// @notice Returns all registered pair IDs (active and inactive).
