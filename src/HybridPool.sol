@@ -15,9 +15,26 @@ import "./OracleAdmin.sol";
 import "./FeeCollector.sol";
 
 /// @title HybridPool
-/// @notice KRW <-> USDC/USDT StableSwap pool (Curve 2-pool math) with oracle fallback.
-/// @dev When |curve_out - oracle_out| / oracle_out > slippageThresholdBps, switches to oracle pricing.
-///      LP tokens are minted as ERC20. Flash loan defense: no swap in same block as liquidity change.
+/// @notice KRW ↔ USDC/USDT StableSwap AMM pool (Curve 2-pool math) with oracle price fallback.
+///         Operates alongside the CLOB to provide on-chain liquidity for KRW stablecoin swaps.
+/// @dev Architecture:
+///      - Primary pricing: Curve StableSwap invariant (D = A·n·Σxᵢ + Πxᵢⁿ / Dⁿ⁻¹·nⁿ).
+///      - Fallback: if |curveOut - oracleOut| / oracleOut > slippageThresholdBps, use oracle price.
+///      - LP tokens are minted as ERC20 ("HyperKRW LP" / "KRWLP"). MINIMUM_LIQUIDITY is
+///        permanently locked to 0xdead on first deposit to prevent share inflation attacks.
+///      - Amplification coefficient A can be ramped gradually (min 7 days, max 10x change).
+///      - Flash loan defense: swap is blocked in the same block as addLiquidity/removeLiquidity
+///        (lastLiquidityChangeBlock guard).
+///      - Read-only reentrancy: `lock` modifier prevents mid-execution view manipulation
+///        (Curve 2023 pattern). `nonReentrant` guards write-write reentrancy.
+///      - All balances are normalised to 18 decimals internally for StableSwap math
+///        (CR-5 fix: handles USDC/USDT with 6 decimals).
+///
+///      Key invariants:
+///      - tokens[0] = KRW stablecoin, tokens[1] = USDC/USDT (set at initialize, immutable after).
+///      - poolBalances[] is the authoritative internal balance — raw ERC20 balance may differ.
+///      - Swap fees are sent to FeeCollector (DEPOSITOR_ROLE must be granted to this contract).
+///      - Only DEFAULT_ADMIN_ROLE may pause/unpause and adjust A.
 contract HybridPool is
     Initializable,
     ERC20Upgradeable,
@@ -28,41 +45,96 @@ contract HybridPool is
 {
     using SafeERC20 for IERC20;
 
+    /// @notice Role for the off-chain operator (unused in current implementation, reserved).
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
+
+    /// @notice Minimum LP tokens permanently locked to 0xdead on first deposit.
+    /// @dev    Prevents share inflation / first-depositor attacks.
     uint256 public constant MINIMUM_LIQUIDITY = 1000;
+
+    /// @dev Number of tokens in the pool (constant 2 for KRW + USDC/USDT).
     uint256 private constant N_COINS = 2;
+
+    /// @dev Internal precision multiplier for A storage (A_stored = A_user * A_PRECISION).
     uint256 private constant A_PRECISION = 100;
+
+    /// @dev Maximum allowed amplification coefficient (user-facing, not scaled).
     uint256 private constant MAX_A = 1_000_000;
+
+    /// @dev Maximum ratio by which A may change in a single rampA() call (10x up or 1/10x down).
     uint256 private constant MAX_A_CHANGE = 10;
+
+    /// @dev Minimum duration for an A ramp operation (prevents sudden large A changes).
     uint256 private constant MIN_RAMP_TIME = 7 days;
 
-    /// @notice Pool tokens: [0] = KRW stablecoin, [1] = USDC/USDT
+    /// @notice Pool tokens: [0] = KRW stablecoin, [1] = USDC/USDT.
+    /// @dev    Set once at initialize and never changed.
     address[2] public tokens;
-    /// @notice Internal balance tracking (avoids relying on raw ERC20 balances)
+
+    /// @notice Internal balance tracking for each pool token (avoids relying on raw ERC20 balances).
+    /// @dev    poolBalances[0] = KRW balance (18 decimals), poolBalances[1] = USDC balance (native decimals).
     uint256[2] public poolBalances;
 
+    /// @notice OracleAdmin used to obtain the KRW/USDC rate for the oracle fallback path.
     OracleAdmin       public oracle;
+
+    /// @notice Compliance module used to gate swap access.
     IComplianceModule public compliance;
+
+    /// @notice FeeCollector that receives swap fees.
     FeeCollector      public feeCollector;
 
+    /// @notice Swap fee in basis points (e.g. 5 = 0.05%). Max 100 (1%).
     uint256 public swapFeeBps;
+
+    /// @notice Threshold in basis points for switching from curve to oracle pricing.
+    /// @dev    If |curveOut - oracleOut| / oracleOut (in bps) > slippageThresholdBps, oracle mode activates.
     uint256 public slippageThresholdBps;
 
-    // Amplification coefficient ramp
+    /// @notice Starting A value (scaled by A_PRECISION) at the beginning of a ramp.
     uint256 public initialA;
+
+    /// @notice Target A value (scaled by A_PRECISION) at the end of a ramp.
     uint256 public futureA;
+
+    /// @notice Block timestamp when the current ramp began.
     uint256 public initialATime;
+
+    /// @notice Block timestamp when the ramp will complete and futureA will be the live A.
     uint256 public futureATime;
 
-    /// @dev Flash loan defense: block number of last liquidity add/remove
+    /// @notice Block number of the last addLiquidity or removeLiquidity call.
+    /// @dev    Flash loan defense: swap() reverts if lastLiquidityChangeBlock == block.number.
     uint256 public lastLiquidityChangeBlock;
 
-    /// @dev Read-only reentrancy guard (Curve 2023 bug mitigation)
+    /// @dev Read-only reentrancy guard state variable (Curve 2023 bug mitigation).
+    ///      1 = unlocked, 2 = locked. Initialised to 1 in _initParams.
     uint256 private _locked;
 
+    /// @notice Emitted when a token swap is executed.
+    /// @param user       Address that performed the swap.
+    /// @param tokenIn    Address of the input token.
+    /// @param amountIn   Amount of tokenIn provided.
+    /// @param amountOut  Amount of the other token received (after fee).
+    /// @param oracleMode True if the swap used oracle pricing instead of Curve math.
     event TokensSwapped(address indexed user, address tokenIn, uint256 amountIn, uint256 amountOut, bool oracleMode);
+
+    /// @notice Emitted when liquidity is added to the pool.
+    /// @param provider   Address that provided liquidity.
+    /// @param amounts    Amounts of [KRW, USDC] deposited.
+    /// @param lpTokens   Number of LP tokens minted to the provider.
     event LiquidityAdded(address indexed provider, uint256[2] amounts, uint256 lpTokens);
+
+    /// @notice Emitted when liquidity is removed from the pool.
+    /// @param provider  Address that removed liquidity.
+    /// @param lpTokens  Number of LP tokens burned.
+    /// @param amounts   Amounts of [KRW, USDC] returned to the provider.
     event LiquidityRemoved(address indexed provider, uint256 lpTokens, uint256[2] amounts);
+
+    /// @notice Emitted when an A ramp is initiated.
+    /// @param oldA     Starting A value (A_PRECISION-scaled).
+    /// @param newA     Target A value (A_PRECISION-scaled).
+    /// @param endTime  Unix timestamp when the ramp completes.
     event RampA(uint256 oldA, uint256 newA, uint256 endTime);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -71,16 +143,16 @@ contract HybridPool is
     }
 
     /// @notice Initialize the pool.
-    /// @param admin Admin address (DEFAULT_ADMIN_ROLE)
-    /// @param operator Operator address (OPERATOR_ROLE)
-    /// @param krwToken KRW stablecoin address (tokens[0])
-    /// @param quoteToken USDC/USDT address (tokens[1])
-    /// @param _oracle OracleAdmin contract address
-    /// @param _compliance Compliance module address
-    /// @param _feeCollector FeeCollector contract address
-    /// @param _A Initial amplification coefficient
-    /// @param _swapFeeBps Swap fee in basis points
-    /// @param _slippageThresholdBps Oracle fallback trigger threshold in bps
+    /// @param admin                 Admin address (DEFAULT_ADMIN_ROLE).
+    /// @param operator              Operator address (OPERATOR_ROLE).
+    /// @param krwToken              KRW stablecoin address (tokens[0]).
+    /// @param quoteToken            USDC/USDT address (tokens[1]).
+    /// @param _oracle               OracleAdmin contract address.
+    /// @param _compliance           Compliance module address.
+    /// @param _feeCollector         FeeCollector contract address.
+    /// @param _A                    Initial amplification coefficient (user-facing, e.g. 100).
+    /// @param _swapFeeBps           Swap fee in basis points (max 100 = 1%).
+    /// @param _slippageThresholdBps Oracle fallback trigger threshold in bps.
     function initialize(
         address admin,
         address operator,
@@ -159,6 +231,8 @@ contract HybridPool is
     // so that view functions like currentA() can detect mid-execution state via `notLocked`.
     // `nonReentrant` (ReentrancyGuardUpgradeable) guards against write-write reentrancy.
     // Both are intentionally applied together — they protect against different attack surfaces.
+
+    /// @dev Sets _locked = 2 during execution. Combined with nonReentrant for full protection.
     modifier lock() {
         require(_locked == 1, "Reentrant");
         _locked = 2;
@@ -166,6 +240,7 @@ contract HybridPool is
         _locked = 1;
     }
 
+    /// @dev Reverts if the pool is mid-execution (read-only reentrancy guard for view paths).
     modifier notLocked() {
         require(_locked == 1, "Pool locked");
         _;
@@ -176,9 +251,13 @@ contract HybridPool is
     // ─────────────────────────────────────────────
 
     /// @notice Add liquidity to the pool and receive LP tokens.
-    /// @param amounts Amounts of [KRW, USDC] to deposit
-    /// @param minLpOut Minimum LP tokens to receive (slippage protection)
-    /// @return lpTokens LP tokens minted to caller
+    /// @dev    On first deposit, MINIMUM_LIQUIDITY is permanently minted to 0xdead.
+    ///         Subsequent deposits mint LP proportional to the minimum contribution ratio.
+    ///         All amounts are normalised to 18 decimals before ratio comparison (CR-5).
+    ///         Sets lastLiquidityChangeBlock to prevent same-block flash loan swaps.
+    /// @param amounts  Amounts of [KRW, USDC] to deposit (native token decimals).
+    /// @param minLpOut Minimum LP tokens to receive (slippage protection; reverts if not met).
+    /// @return lpTokens LP tokens minted to caller.
     function addLiquidity(uint256[2] memory amounts, uint256 minLpOut)
         external
         nonReentrant
@@ -229,8 +308,10 @@ contract HybridPool is
     }
 
     /// @notice Remove liquidity proportionally and receive underlying tokens.
-    /// @param lpAmount LP tokens to burn
-    /// @param minAmountsOut Minimum amounts of [KRW, USDC] to receive
+    /// @dev    Burns lpAmount of LP tokens and returns the proportional share of each pool token.
+    ///         Sets lastLiquidityChangeBlock to block future same-block swaps.
+    /// @param lpAmount      LP tokens to burn (must be > 0).
+    /// @param minAmountsOut Minimum amounts of [KRW, USDC] to receive (slippage protection).
     function removeLiquidity(uint256 lpAmount, uint256[2] memory minAmountsOut)
         external
         nonReentrant
@@ -268,10 +349,15 @@ contract HybridPool is
     // ─────────────────────────────────────────────
 
     /// @notice Swap tokenIn for the other pool token.
-    /// @param tokenIn Address of input token (must be tokens[0] or tokens[1])
-    /// @param amountIn Amount of tokenIn to swap
-    /// @param minAmountOut Minimum output amount (slippage protection)
-    /// @return amountOut Amount of output token received
+    /// @dev    Pricing uses Curve StableSwap by default. Falls back to oracle if the
+    ///         curve output deviates from oracle output by more than slippageThresholdBps.
+    ///         Blocked in the same block as any liquidity change (flash loan defense).
+    ///         Compliance canSwap() is checked before execution.
+    ///         Fee is collected in the output token and sent to FeeCollector.
+    /// @param tokenIn      Address of input token (must be tokens[0] or tokens[1]).
+    /// @param amountIn     Amount of tokenIn to swap (must be > 0).
+    /// @param minAmountOut Minimum output amount (slippage protection; reverts if not met).
+    /// @return amountOut   Amount of output token received (after fee deduction).
     function swap(address tokenIn, uint256 amountIn, uint256 minAmountOut)
         external
         nonReentrant
@@ -316,6 +402,7 @@ contract HybridPool is
     }
 
     /// @dev Compute raw output, fee, and oracle mode for a swap.
+    ///      rawOut is the gross output before fee deduction; fee is then subtracted by caller.
     function _computeSwap(uint256 i, uint256 j, uint256 amountIn)
         internal
         view
@@ -335,7 +422,7 @@ contract HybridPool is
         fee = rawOut * swapFeeBps / 10_000;
     }
 
-    /// @dev Send fee to FeeCollector if non-zero.
+    /// @dev Approve and forward `fee` of `token` to FeeCollector. No-op if fee is zero.
     function _collectFee(address token, uint256 fee) internal {
         if (fee > 0) {
             IERC20(token).forceApprove(address(feeCollector), fee);
@@ -349,8 +436,11 @@ contract HybridPool is
 
     /// @notice Begin a gradual ramp of the amplification coefficient A.
     /// @dev Takes at least MIN_RAMP_TIME (7 days). Max 10x change per ramp.
-    /// @param futureA_ Target A value (NOT multiplied by A_PRECISION -- the function handles it)
-    /// @param futureTime_ Unix timestamp when futureA_ is reached
+    ///      Higher A → more liquidity concentrated near peg (lower slippage for stablecoins).
+    ///      Lower A → more spread liquidity (better for depeg resilience).
+    ///      A_PRECISION scaling is handled internally — pass the user-facing value.
+    /// @param futureA_    Target A value (NOT multiplied by A_PRECISION — the function handles it).
+    /// @param futureTime_ Unix timestamp when futureA_ is reached (must be ≥ now + 7 days).
     function rampA(uint256 futureA_, uint256 futureTime_) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(block.timestamp + MIN_RAMP_TIME <= futureTime_, "Ramp too short");
         uint256 currentA_ = _currentA();
@@ -371,12 +461,15 @@ contract HybridPool is
     }
 
     /// @notice Get the current amplification coefficient (includes A_PRECISION scaling).
-    /// @dev Returns interpolated value during ramp. Use currentA() / A_PRECISION for human-readable A.
+    /// @dev Returns interpolated value during ramp. Divide by A_PRECISION for human-readable A.
+    ///      Reverts if pool is mid-execution (read-only reentrancy protection).
+    /// @return Current A value scaled by A_PRECISION.
     function currentA() public view notLocked returns (uint256) {
         return _currentA();
     }
 
     /// @dev Internal A calculation without the notLocked modifier (for use within lock()).
+    ///      Linearly interpolates between initialA and futureA based on elapsed time.
     function _currentA() internal view returns (uint256) {
         if (block.timestamp >= futureATime) return futureA;
         uint256 elapsed   = block.timestamp - initialATime;
@@ -390,6 +483,7 @@ contract HybridPool is
 
     /// @notice Pause the pool (admin only). Blocks swap, addLiquidity, removeLiquidity.
     function pause()   external onlyRole(DEFAULT_ADMIN_ROLE) { _pause(); }
+
     /// @notice Unpause the pool (admin only).
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) { _unpause(); }
 
@@ -407,7 +501,12 @@ contract HybridPool is
         }
     }
 
-    /// @dev Compute D invariant using Newton's method (Curve StableSwap formula).
+    /// @dev Compute the StableSwap invariant D using Newton's method (Curve 2-pool formula).
+    ///      D satisfies: A·n·Σxᵢ + D = A·n·D + Dⁿ⁺¹ / (nⁿ·Πxᵢ)
+    ///      Iterates up to 255 times; converges in practice within ~10 iterations.
+    /// @param xp  Normalised pool balances (18 decimals each).
+    /// @param amp Amplification coefficient (A_PRECISION-scaled).
+    /// @return D  The invariant value (18 decimals).
     function _getD(uint256[2] memory xp, uint256 amp) internal pure returns (uint256) {
         uint256 S = xp[0] + xp[1];
         if (S == 0) return 0;
@@ -433,7 +532,14 @@ contract HybridPool is
         return D;
     }
 
-    /// @dev Compute output balance y given new input balance x (Newton's method).
+    /// @dev Compute output balance y given new input balance x using Newton's method.
+    ///      Solves the StableSwap invariant for yⱼ after xᵢ changes to x.
+    ///      Iterates up to 255 times; converges in practice within ~10 iterations.
+    /// @param i  Index of the input token.
+    /// @param j  Index of the output token.
+    /// @param x  New balance of token i (18 decimals, normalised).
+    /// @param xp Current normalised pool balances (18 decimals each).
+    /// @return   New balance of token j after the swap (18 decimals).
     function _getY(uint256 i, uint256 j, uint256 x, uint256[2] memory xp)
         internal
         view
@@ -478,6 +584,11 @@ contract HybridPool is
     /// @dev Calculate output amount using Curve StableSwap formula.
     ///      CR-5 fix: normalise all balances and dx to 18 decimals before math,
     ///      then denormalise the output back to token j's native decimals.
+    ///      Returns 0 if pool is empty or math produces an invalid result.
+    /// @param i  Input token index.
+    /// @param j  Output token index.
+    /// @param dx Amount of token i being swapped (native decimals).
+    /// @return   Gross output amount in token j's native decimals.
     function _calcSwapCurve(uint256 i, uint256 j, uint256 dx) internal view returns (uint256) {
         uint256[2] memory muls = _precisionMultipliers();
         uint256[2] memory xp;
@@ -493,7 +604,12 @@ contract HybridPool is
         return dyNorm / muls[j];                   // denormalise to token j decimals
     }
 
-    /// @dev Calculate output amount using oracle price. Returns 0 if oracle unavailable.
+    /// @dev Calculate output amount using oracle price (fallback path).
+    ///      oracle.getPrice(tokens[1]) returns KRW per 1 USDC (18 decimals).
+    ///      Returns 0 if oracle is unavailable or stale.
+    /// @param i   Input token index (0 = KRW, 1 = USDC).
+    /// @param dx  Amount of input token (18 decimals for KRW, native for USDC).
+    /// @return    Gross output in the other token's units.
     function _calcSwapOracle(uint256 i, uint256 dx) internal view returns (uint256) {
         try oracle.getPrice(tokens[1]) returns (uint256 price) {
             if (price == 0) return 0;
@@ -510,11 +626,12 @@ contract HybridPool is
     }
 
     /// @dev Geometric mean sqrt(a*b) for initial LP amount. Overflow-safe.
+    ///      Used on first deposit to set the initial LP supply.
     function _geometricMean(uint256[2] memory amounts) internal pure returns (uint256) {
         return _sqrt(amounts[0] * amounts[1]);
     }
 
-    /// @dev Integer square root (Babylonian method).
+    /// @dev Integer square root using the Babylonian method. Rounds down.
     function _sqrt(uint256 x) internal pure returns (uint256) {
         if (x == 0) return 0;
         uint256 z = (x + 1) / 2;
