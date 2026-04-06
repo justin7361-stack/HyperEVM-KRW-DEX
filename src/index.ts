@@ -2,6 +2,7 @@ import 'dotenv/config'
 import { loadConfig } from './config/config.js'
 import { createClients } from './chain/contracts.js'
 import { createOperatorWallet } from './chain/wallet.js'
+import { createVaultClient } from './chain/vaultClient.js'
 import { EIP712Verifier } from './verification/EIP712Verifier.js'
 import { PolicyEngine } from './compliance/PolicyEngine.js'
 import { BasicBlocklistPlugin } from './compliance/plugins/BasicBlocklistPlugin.js'
@@ -33,6 +34,13 @@ import { keccak256, encodePacked } from 'viem'
 
 const config = loadConfig()
 
+const vault = createVaultClient(config)
+if (vault) {
+  console.log('[Vault] AppRole configured — operator key loaded from Vault')
+} else {
+  console.log('[Vault] No Vault config — using OPERATOR_PRIVATE_KEY env var (testnet/dev)')
+}
+
 // O-1: PostgreSQL persistence (no-op NullDatabase if DATABASE_URL not set)
 const db = await createDatabase(config.databaseUrl)
 
@@ -40,7 +48,7 @@ const db = await createDatabase(config.databaseUrl)
 const pubsub = await createPubSub(config.redisUrl)
 
 const { publicClient, pairRegistry } = createClients(config)
-const { walletClient } = createOperatorWallet(config)
+const { walletClient } = await createOperatorWallet(config, vault)
 
 const domain = {
   name: 'KRW DEX' as const,
