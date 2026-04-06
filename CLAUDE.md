@@ -26,6 +26,36 @@ This is the **HyperKRW DEX Server**: off-chain CLOB matching engine for the Hype
 
 ---
 
+## 컨텍스트 관리 규칙 (Context Management)
+
+### 세션 분리 원칙
+3개 레포(krw-dex-server / HyperEVM-KRW-DEX / krw-dex-web)를 동시에 다루면 컨텍스트가 빠르게 소모된다.
+**레포 1개 = 세션 1개** 원칙을 기본으로 한다.
+
+| 세션 유형 | 담당 레포/범위 | 예시 |
+|---------|-------------|------|
+| Server 세션 | `krw-dex-server` 단독 | 버그 수정, 인프라, API 추가 |
+| Contract 세션 | `HyperEVM-KRW-DEX` 단독 | Solidity 버그, 배포 스크립트 |
+| Frontend 세션 | `krw-dex-web` 단독 | UI 버그, 컴포넌트 추가 |
+| Infra/Deploy 세션 | docker-compose, traefik, Railway | Phase Q 배포 |
+
+### 새 세션이 필요한 신호 (Claude가 알려줄 것)
+Claude는 다음 상황 중 하나에 해당하면 **작업 완료 후 즉시** 사용자에게 알린다:
+- 현재 대화가 compacting된 이력이 있고, 다음 태스크가 새 레포/도메인으로 전환될 때
+- 현재 태스크가 완료되고 다음 Phase가 **완전히 다른 레포**를 주로 다룰 때
+- 컨텍스트 소모가 많아 코드 품질에 영향을 줄 가능성이 보일 때
+
+### 세션 내 계속 진행 가능한 경우
+- 같은 레포 내에서 연속 작업 중일 때
+- compacting이 발생하지 않았고 컨텍스트가 충분할 때
+- 다음 태스크가 이미 이 세션에서 충분히 논의된 설계 위에 있을 때
+
+### tmr_todo.md가 세션 간 핵심 인수인계 수단
+- compaction/새 세션 후에도 `tmr_todo.md`의 커밋 해시 + 설계 결정사항만 있으면 맥락 복원 가능
+- 따라서 **종료 전 tmr_todo.md를 충분히 상세하게 쓰는 것이 최우선**
+
+---
+
 ## Project Architecture
 
 ```
