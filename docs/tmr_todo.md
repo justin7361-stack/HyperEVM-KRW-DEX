@@ -1,7 +1,7 @@
 # HyperKRW DEX — Session Todo
 
-**마지막 업데이트:** 2026-04-06 (세션 3)
-**현재 상태:** 모든 서버/컨트랙트/프론트엔드 코드 완성. Playwright E2E 완료. Contract Natspec 진행중. Phase Q (테스트넷 배포)만 남음 (사용자 직접 실행 필요)
+**마지막 업데이트:** 2026-04-06 (세션 4)
+**현재 상태:** Phase S-0 (테스트넷 전 크리티컬 수정) 완료. 28 test files, 251 tests all passing. tsc --noEmit clean. Phase Q (테스트넷 배포)만 남음 (사용자 직접 실행 필요)
 
 ---
 
@@ -114,6 +114,24 @@
 - `postgres`/`ioredis` 는 선택적 런타임 dep — `npm install postgres ioredis` 실행해야 사용 가능
 - Docker Compose는 `WITH_POSTGRES=1 WITH_REDIS=1` 빌드 인자로 optional dep 자동 설치
 - O-3 (Ponder 인덱서)는 별도 서비스, 미구현 — Phase Q 배포 후 필요 시 추가
+
+---
+
+## ✅ 완료 — Phase S-0 (테스트넷 전 크리티컬 수정, 2026-04-06)
+
+| 태스크 | 커밋 | 내용 |
+|-------|------|-----|
+| SUG-1: MarkPriceOracle 타임스탬프 | `fd2dcb0` | getMarkPriceWithTs() 추가 — { price, ts } 반환 |
+| IMP-4: liquidation price=0n 버그 | `fd2dcb0` | LiquidationEngine: markPrice 사용, 0n 가드 추가 |
+| SUG-1: 스테일니스 체크 | `fd2dcb0` | STALE_THRESHOLD_MS=5분, 5분 초과 시 청산 건너뜀 |
+| IMP-8: MarginAccount 이중 상태 | `9f9621b` | PositionTracker 단일 소스, positions Map 제거 |
+| IMP-8: server.ts 연결 | `9f9621b` | new MarginAccount(positionTracker), server.ts/orders.test.ts 동기화 |
+| SUG-6: FundingRateEngine Number() 주석 | `d0318fd` | computeRate() display-only 명시적 주석 |
+
+**검증 결과:**
+- `npx tsc --noEmit`: 에러 0개
+- `npx vitest run`: 28 파일, 251 테스트 all passed
+- `git push origin master`: `43ec703..d0318fd`
 
 ---
 
