@@ -1,7 +1,7 @@
 # HyperKRW DEX — Session Todo
 
-**마지막 업데이트:** 2026-04-06
-**현재 상태:** Phase M/N/P/O/R-2/R-4 완료 → Phase Q (테스트넷 배포) 준비 완료
+**마지막 업데이트:** 2026-04-06 (세션 2)
+**현재 상태:** R-2/R-3/R-4/R-7 완료, 서버 TODO 전부 해소 → Phase Q (테스트넷 배포) 준비 완료
 
 ---
 
@@ -57,6 +57,21 @@
 | P-5: Toast 피드백 시스템 | 이전 세션 | src/components/ui/Toast.tsx, CSS 애니메이션, alert() 제거 |
 | P-6: 청산 거리 방향 수정 | 이전 세션 | isLong prop, Long: markPrice-liqPrice, Short: 반전 |
 
+## ✅ 완료 — 세션 2 추가 작업 (2026-04-06)
+
+| 태스크 | 레포 | 커밋 | 내용 |
+|-------|------|------|-----|
+| R-3: TransferToGnosisSafe | contracts `38b6000` | Gnosis Safe로 DEFAULT_ADMIN_ROLE 이전 스크립트 + 테스트 5개 |
+| R-2: VaultClient | server `88ae7fa` | AppRole 인증, operator key Vault에서 읽기, .env 폴백 |
+| entryPrice + unrealizedPnl | server `cd75efd` | PositionTracker 가중평균 entryPrice, /positions 실제 PnL 반환 |
+| settleFunding 온체인 | server `a750dc5` | FundingPayment → OrderSettlement.settleFunding() 배치 콜 |
+| CircuitBreaker (R-7) | server `38f55c2` | 가격밴드(10%/1분) 자동 중단, POST /admin/halt|resume, GET /admin/halted |
+| WS markprice/funding push | server `38f55c2` | markprice.update 5초, funding.update 30초 WS 푸시 |
+| Frontend WS 연동 | web `3427d9d` | useFundingRate WS 캐시 업데이트, useMarkPrice 훅 신규 |
+| Indexer 프로덕션 설정 | indexer `b736f46` | .env.example 정리, Dockerfile HEALTHCHECK 추가 |
+
+---
+
 ## ✅ 완료 — Phase R-2 (Vault OSS 키 관리) + R-4 (Timelock)
 
 | 태스크 | 커밋 | 내용 |
@@ -105,6 +120,16 @@
 ---
 
 ## 🙋 사용자 직접 실행 필요
+
+### 인덱서 GitHub 리모트 설정 (1회)
+```bash
+# 1. GitHub에서 새 레포 생성: https://github.com/new
+#    이름: krw-dex-indexer
+# 2. 로컬에서:
+cd ~/krw-dex-indexer
+git remote add origin https://github.com/justin7361-stack/krw-dex-indexer.git
+git push -u origin master
+```
 
 ### R-2: HashiCorp Vault 서버 실행 (메인넷 준비 시)
 ```bash
