@@ -82,6 +82,14 @@ liquidationEngine.on('liquidation', (event) => {
   console.log(`[Liquidation] ${event.position.maker} on ${event.position.pairId} — ${event.reason}`)
 })
 
+// M-3: Wire up funding payment events (CR-4)
+// On-chain settleFunding() call will be added once the contract exposes the function (Phase N).
+// For now we log each payment so it's observable and not silently dropped.
+fundingEngine.on('payment', (p: import('./core/funding/FundingRateEngine.js').FundingPayment) => {
+  console.log(`[Funding] payment maker=${p.maker} pair=${p.pairId} amount=${p.amount} rate=${p.rate}`)
+  // TODO(N-3): await walletClient.writeContract({ functionName: 'settleFunding', args: [...] })
+})
+
 const worker = new SettlementWorker({
   batchSize:      config.batchSize,
   batchTimeoutMs: config.batchTimeoutMs,
@@ -185,7 +193,7 @@ server.listen({ port: config.port, host: config.host }, (err) => {
   if (err) { console.error(err); process.exit(1) }
 })
 
-process.on('SIGTERM', async () => {
+async function gracefulShutdown() {
   expiryWorker.stop()
   fundingEngine.stopAll()
   insuranceSyncer.stop()
@@ -194,4 +202,8 @@ process.on('SIGTERM', async () => {
   worker.stop()
   await server.close()
   process.exit(0)
-})
+}
+
+// M-4: Handle both SIGTERM (Docker/Railway) and SIGINT (Ctrl-C / local dev)
+process.on('SIGTERM', gracefulShutdown)
+process.on('SIGINT',  gracefulShutdown)
