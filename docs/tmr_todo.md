@@ -1,7 +1,7 @@
 # HyperKRW DEX — Session Todo
 
 **마지막 업데이트:** 2026-04-06
-**현재 상태:** Phase M/N/P/O 완료 → Phase Q (테스트넷 배포) 준비 완료
+**현재 상태:** Phase M/N/P/O/R-2/R-4 완료 → Phase Q (테스트넷 배포) 준비 완료
 
 ---
 
@@ -57,6 +57,18 @@
 | P-5: Toast 피드백 시스템 | 이전 세션 | src/components/ui/Toast.tsx, CSS 애니메이션, alert() 제거 |
 | P-6: 청산 거리 방향 수정 | 이전 세션 | isLong prop, Long: markPrice-liqPrice, Short: 반전 |
 
+## ✅ 완료 — Phase R-2 (Vault OSS 키 관리) + R-4 (Timelock)
+
+| 태스크 | 커밋 | 내용 |
+|-------|------|-----|
+| R-2: Vault OSS scaffold | server `d12bace` | vault/vault.hcl (TLS+audit+HSM upgrade path), vault/policies/{operator,oracle}.hcl, vault/setup.sh (KV v2 + AppRole 자동화) |
+| R-2: /health 강화 | server `d12bace` | {status,ts,version,checks{matching,db,pubsub}}, 503 on degraded, db/pubsub 전달 |
+| R-4: TimelockController | contracts `a915918` | script/SetupTimelock.s.sol — 48h 딜레이, 7개 컨트랙트 DEFAULT_ADMIN_ROLE 이전, struct 패턴 |
+
+**R-2 Vault 사용자 직접 실행 필요 항목:** 아래 🙋 섹션 참조 (R-2 항목)
+
+---
+
 ## ✅ 완료 — Phase O (인프라)
 
 | 태스크 | 커밋 | 내용 |
@@ -93,6 +105,34 @@
 ---
 
 ## 🙋 사용자 직접 실행 필요
+
+### R-2: HashiCorp Vault 서버 실행 (메인넷 준비 시)
+```bash
+# 1. Vault Docker 실행
+docker run -d --name vault \
+  -p 8200:8200 \
+  -v $(pwd)/vault/vault.hcl:/vault/config/vault.hcl \
+  -v vault_data:/vault/data \
+  -v vault_tls:/vault/tls \
+  --cap-add=IPC_LOCK \
+  hashicorp/vault:latest server
+
+# 2. 초기화 (unseal 키 5개 + root token 안전하게 저장!)
+export VAULT_ADDR=https://vault.hyperkrw.xyz
+vault operator init    # 출력을 오프라인에 보관
+
+# 3. 봉인 해제 (3/5 키 사용)
+vault operator unseal  # x3
+
+# 4. 셋업 스크립트 실행 (root token으로)
+export VAULT_TOKEN=<root-token>
+bash vault/setup.sh
+
+# 5. root token 폐기
+vault token revoke $VAULT_TOKEN
+
+# 6. 서버에 VAULT_ROLE_ID + VAULT_SECRET_ID 환경변수 설정
+```
 
 ### Q-1: HYPE 테스트넷 토큰 확보 (선행 필수)
 ```
