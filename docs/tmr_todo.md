@@ -1,7 +1,7 @@
 # HyperKRW DEX — Session Todo
 
-**마지막 업데이트:** 2026-04-06 (세션 2)
-**현재 상태:** R-2/R-3/R-4/R-7 완료, 서버 TODO 전부 해소 → Phase Q (테스트넷 배포) 준비 완료
+**마지막 업데이트:** 2026-04-06 (세션 3)
+**현재 상태:** 모든 서버/컨트랙트/프론트엔드 코드 완성. Playwright E2E 완료. Contract Natspec 진행중. Phase Q (테스트넷 배포)만 남음 (사용자 직접 실행 필요)
 
 ---
 
@@ -65,10 +65,25 @@
 | R-2: VaultClient | server `88ae7fa` | AppRole 인증, operator key Vault에서 읽기, .env 폴백 |
 | entryPrice + unrealizedPnl | server `cd75efd` | PositionTracker 가중평균 entryPrice, /positions 실제 PnL 반환 |
 | settleFunding 온체인 | server `a750dc5` | FundingPayment → OrderSettlement.settleFunding() 배치 콜 |
-| CircuitBreaker (R-7) | server `38f55c2` | 가격밴드(10%/1분) 자동 중단, POST /admin/halt|resume, GET /admin/halted |
+| CircuitBreaker (R-7) | server `38f55c2` | 가격밴드(10%/1분) 자동 중단, POST /admin/halt\|resume, GET /admin/halted |
 | WS markprice/funding push | server `38f55c2` | markprice.update 5초, funding.update 30초 WS 푸시 |
 | Frontend WS 연동 | web `3427d9d` | useFundingRate WS 캐시 업데이트, useMarkPrice 훅 신규 |
 | Indexer 프로덕션 설정 | indexer `b736f46` | .env.example 정리, Dockerfile HEALTHCHECK 추가 |
+
+## ✅ 완료 — 세션 3 추가 작업 (2026-04-06)
+
+| 태스크 | 레포 | 커밋 | 내용 |
+|-------|------|------|-----|
+| OpenAPI/Swagger 문서 | server `f489164` | @fastify/swagger v8 + swagger-ui v4, buildServer() async, /docs UI |
+| WalletRateLimiter | server `edc205e` | 슬라이딩 윈도우 Map, 429 응답 + retryAfter, 60s 클린업 |
+| Admin 서킷브레이커 UI | web `b20ac39` | AdminPage 신규: 서킷브레이커 halt/resume, 404 NotFoundPage |
+| PositionTracker EventEmitter | server `f489164` | extends EventEmitter, 'position.updated' 이벤트 emit |
+| WS position.update 푸시 | server `38f55c2` | stream.ts positionTracker 구독 → 해당 pairId WS 클라이언트로 push |
+| usePositions WS 실시간 | web `af0058e` | 'position.update' WS 수신 → TanStack 캐시 즉시 업데이트 |
+| Vite 코드 스플리팅 | web `5417717` | manualChunks 4개, 모든 페이지 React.lazy() + Suspense |
+| OrderForm markPrice WS | web `9c2f9ac` | useMarkPrice → effectiveMarkPrice(WS\|\|REST) OrderForm/PositionPanel |
+| Playwright E2E 테스트 | web `b9015ca` | playwright.config.ts + e2e/ (navigation, health, orderbook) |
+| Contract Natspec | contracts (진행중) | 7개 컨트랙트 @title/@notice/@dev 문서화 (백그라운드 에이전트) |
 
 ---
 
