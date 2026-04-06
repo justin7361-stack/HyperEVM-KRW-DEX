@@ -1,5 +1,5 @@
 ##
-## HyperKRW DEX — Docker Compose (O-6)
+## HyperKRW DEX — Docker Compose (O-6 + O-3)
 ##
 ## Usage:
 ##   cp .env.example .env        # fill in your values
@@ -7,8 +7,9 @@
 ##
 ## Services:
 ##   server    — krw-dex-server (Node.js matching engine + REST/WS API)
-##   postgres  — PostgreSQL 16 (persistence, optional)
-##   redis     — Redis 7 (pub/sub + rate-limit counters, optional)
+##   indexer   — krw-dex-indexer (Ponder on-chain event indexer)
+##   postgres  — PostgreSQL 16 (persistence)
+##   redis     — Redis 7 (pub/sub + rate-limit counters)
 ##   traefik   — API gateway: TLS termination, rate-limiting, reverse proxy
 ##
 ## Scaling:
@@ -69,6 +70,39 @@ services:
       - "traefik.http.routers.server-ws.tls.certresolver=letsencrypt"
       - "traefik.http.services.server-ws.loadbalancer.server.port=3000"
 
+  # ── Ponder Indexer (O-3) ─────────────────────────────────────────────────────
+  # On-chain event indexer: OrderFilled, LiquidationSettled, FundingSettled, etc.
+  # Exposes GraphQL + REST API on port 42069 (internal).
+  # Repo: ../krw-dex-indexer (must be cloned alongside krw-dex-server)
+  indexer:
+    build:
+      context: ../krw-dex-indexer
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      RPC_URL:                    ${RPC_URL}
+      RPC_URL_FALLBACK:           ${RPC_URL_FALLBACK:-}
+      CHAIN_ID:                   ${CHAIN_ID}
+      ORDER_SETTLEMENT_ADDRESS:   ${ORDER_SETTLEMENT_ADDRESS}
+      INSURANCE_FUND_ADDRESS:     ${INSURANCE_FUND_ADDRESS}
+      ORACLE_ADMIN_ADDRESS:       ${ORACLE_ADMIN_ADDRESS}
+      PAIR_REGISTRY_ADDRESS:      ${PAIR_REGISTRY_ADDRESS}
+      START_BLOCK:                ${START_BLOCK:-0}
+      DATABASE_URL:               postgresql://krwdex:${POSTGRES_PASSWORD:-secret}@postgres:5432/krwdex_indexer
+    expose:
+      - "42069"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.indexer.rule=Host(`${API_DOMAIN:-api.hyperkrw.xyz}`) && PathPrefix(`/indexer`)"
+      - "traefik.http.routers.indexer.entrypoints=websecure"
+      - "traefik.http.routers.indexer.tls.certresolver=letsencrypt"
+      - "traefik.http.services.indexer.loadbalancer.server.port=42069"
+      - "traefik.http.middlewares.indexer-strip.stripprefix.prefixes=/indexer"
+      - "traefik.http.routers.indexer.middlewares=indexer-strip,security-headers@file"
+
   # ── PostgreSQL ───────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
@@ -80,6 +114,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./src/db/init-indexer-db.sql:/docker-entrypoint-initdb.d/00-init-indexer-db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U krwdex -d krwdex"]
       interval: 5s
