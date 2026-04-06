@@ -212,6 +212,8 @@ const server = buildServer({
   fundingEngine,
   getMarkPrice:  (pair: string) => markOracle.getMarkPrice(pair),
   getIndexPrice: (pair: string) => markOracle.getIndexPrice(pair),
+  db,
+  pubsub,
 })
 
 server.listen({ port: config.port, host: config.host }, (err) => {
