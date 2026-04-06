@@ -11,6 +11,7 @@ import { MarginAccount } from '../../margin/MarginAccount.js'
 import type { CircuitBreaker } from '../../core/matching/CircuitBreaker.js'
 import type { Config } from '../../config/config.js'
 import type { WalletRateLimiter } from '../../core/matching/WalletRateLimiter.js'
+import type { CancelAfterManager } from '../../core/matching/CancelAfterManager.js'
 
 interface SubmitOrderBody {
   order:     Order
@@ -33,15 +34,16 @@ interface AmendBody {
 }
 
 export function ordersRoutes(
-  verifier:           IOrderVerifier,
-  policy:             PolicyEngine,
-  matching:           MatchingEngine,
-  store:              IOrderBookStore,
-  pairRegistry:       Clients['pairRegistry'],
-  marginAccount:      MarginAccount,
-  circuitBreaker?:    CircuitBreaker,
-  walletRateLimiter?: WalletRateLimiter,
-  config?:            Pick<Config, 'walletRateLimitWindowMs'>,
+  verifier:            IOrderVerifier,
+  policy:              PolicyEngine,
+  matching:            MatchingEngine,
+  store:               IOrderBookStore,
+  pairRegistry:        Clients['pairRegistry'],
+  marginAccount:       MarginAccount,
+  circuitBreaker?:     CircuitBreaker,
+  walletRateLimiter?:  WalletRateLimiter,
+  config?:             Pick<Config, 'walletRateLimitWindowMs'>,
+  cancelAfterManager?: CancelAfterManager,
 ) {
   return async function (fastify: FastifyInstance) {
     // POST /orders — submit a signed order
@@ -336,6 +338,89 @@ export function ordersRoutes(
       // I4 — Return 201
       return reply.status(201).send({ orderId: amended.id })
     })
+
+    // ── Dead Man's Switch (S-1-1 — Hyperliquid pattern) ──────────────────────
+    // POST /orders/cancel-after — schedule automatic cancellation of all open
+    // orders after `seconds`. Call again to reset the timer (heartbeat pattern).
+    // seconds = 0 → disable the switch.
+    // Min 5 s lead time (matches Hyperliquid). Max 86400 s (24 h).
+    //
+    // TODO(auth): in production this should be EIP-712 signed by the maker.
+    fastify.post<{ Body: { maker: string; seconds: number } }>(
+      '/orders/cancel-after',
+      {
+        schema: {
+          tags: ['orders'],
+          summary: 'Dead Man\'s Switch — schedule cancel-all after N seconds',
+          description:
+            'Schedules cancellation of all open orders for `maker` after `seconds`. ' +
+            'Call again to reset the countdown (heartbeat). seconds=0 disables the switch. ' +
+            'Minimum 5 s, maximum 86400 s (24 h).',
+          body: {
+            type: 'object',
+            required: ['maker', 'seconds'],
+            properties: {
+              maker:   { type: 'string', description: 'Maker wallet address (0x...)' },
+              seconds: { type: 'integer', minimum: 0, maximum: 86400,
+                         description: '0 = disable. Min 5 when enabling.' },
+            },
+          },
+          response: {
+            200: {
+              type: 'object',
+              properties: {
+                cancelAt: { type: 'integer', description: 'Unix ms when cancellation will fire; 0 if disabled' },
+              },
+            },
+            400: { type: 'object', properties: { error: { type: 'string' } } },
+            503: { type: 'object', properties: { error: { type: 'string' } } },
+          },
+        },
+      },
+      async (req, reply) => {
+        if (!cancelAfterManager) {
+          return reply.status(503).send({ error: 'Dead Man\'s Switch not available' })
+        }
+
+        const { maker, seconds } = req.body
+        if (!maker || !/^0x[0-9a-fA-F]{40}$/.test(maker)) {
+          return reply.status(400).send({ error: 'Invalid maker address' })
+        }
+
+        const result = cancelAfterManager.set(maker, seconds)
+        if ('error' in result) {
+          return reply.status(400).send({ error: result.error })
+        }
+        return reply.send({ cancelAt: result.cancelAt })
+      },
+    )
+
+    // GET /orders/cancel-after/:maker — query current Dead Man's Switch status
+    fastify.get<{ Params: { maker: string } }>(
+      '/orders/cancel-after/:maker',
+      {
+        schema: {
+          tags: ['orders'],
+          summary: 'Dead Man\'s Switch — query scheduled cancellation time',
+          params: { type: 'object', properties: { maker: { type: 'string' } } },
+          response: {
+            200: {
+              type: 'object',
+              properties: {
+                maker:    { type: 'string' },
+                cancelAt: { type: ['integer', 'null'],
+                            description: 'Unix ms when switch fires, or null if not set' },
+              },
+            },
+          },
+        },
+      },
+      async (req, reply) => {
+        const { maker } = req.params
+        const cancelAt = cancelAfterManager?.getScheduledAt(maker) ?? null
+        return reply.send({ maker, cancelAt })
+      },
+    )
 
     // GET /orders/:address — orders for a maker
     // Query params:

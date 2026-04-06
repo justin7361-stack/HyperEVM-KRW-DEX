@@ -32,6 +32,7 @@ import { InsuranceFundSyncer } from './core/insurance/InsuranceFundSyncer.js'
 import { MarginAccount }     from './margin/MarginAccount.js'
 import { CircuitBreaker }    from './core/matching/CircuitBreaker.js'
 import { WalletRateLimiter } from './core/matching/WalletRateLimiter.js'
+import { CancelAfterManager } from './core/matching/CancelAfterManager.js'
 import { keccak256, encodePacked } from 'viem'
 import { settleFundingOnChain } from './chain/settleFundingOnChain.js'
 
@@ -88,6 +89,15 @@ const traderKeyStore = new TraderKeyStore()
 const walletRateLimiter = new WalletRateLimiter({
   maxRequests: config.walletRateLimitMax,
   windowMs:    config.walletRateLimitWindowMs,
+})
+
+// ── Dead Man's Switch (S-1-1) ───────────────────────────────────────────────
+// cancelAllFn: cancel all open/partial orders for a given maker
+const cancelAfterManager = new CancelAfterManager(async (maker: string) => {
+  const orders = await store.getOrdersByMaker(maker)
+  const targets = orders.filter(o => o.status === 'open' || o.status === 'partial')
+  await Promise.all(targets.map(o => store.updateOrder(o.id, { status: 'cancelled' })))
+  return targets.length
 })
 
 // ── Circuit Breaker ─────────────────────────────────────────────────────────
@@ -256,6 +266,7 @@ const server = await buildServer({
   pubsub,
   circuitBreaker,
   walletRateLimiter,
+  cancelAfterManager,
 })
 
 server.listen({ port: config.port, host: config.host }, (err) => {
@@ -263,6 +274,7 @@ server.listen({ port: config.port, host: config.host }, (err) => {
 })
 
 async function gracefulShutdown() {
+  cancelAfterManager.destroy()
   walletRateLimiter.destroy()
   expiryWorker.stop()
   fundingEngine.stopAll()
