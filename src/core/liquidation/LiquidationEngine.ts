@@ -40,6 +40,8 @@ type SubmitFn = (order: StoredOrder, pairId: string) => Promise<void>
 // Events: 'liquidation' (event: LiquidationEvent)
 export class LiquidationEngine extends EventEmitter {
   private readonly liquidationSteps = new Map<string, number>()
+  /** Mark price is considered stale after this many ms — liquidation is skipped until refreshed. */
+  private readonly STALE_THRESHOLD_MS = 5 * 60 * 1000  // 5 minutes
 
   constructor(
     private readonly oracle:                 MarkPriceOracle,
@@ -53,8 +55,14 @@ export class LiquidationEngine extends EventEmitter {
   async checkPositions(positions: MarginPosition[]): Promise<void> {
     for (const pos of positions) {
       if (pos.size === 0n) continue
-      const markPrice = this.oracle.getMarkPrice(pos.pairId)
+
+      // SUG-1: use timestamped mark price to guard against stale oracle data
+      const { price: markPrice, ts: markTs } = this.oracle.getMarkPriceWithTs(pos.pairId)
       if (markPrice === 0n) continue
+      if (markTs > 0 && Date.now() - markTs > this.STALE_THRESHOLD_MS) {
+        console.warn(`[LiquidationEngine] stale mark price for ${pos.pairId} (${Date.now() - markTs}ms old) — skipping liquidation check`)
+        continue
+      }
 
       const absSize  = pos.size < 0n ? -pos.size : pos.size
       const notional = absSize * markPrice / 10n ** 18n
@@ -179,10 +187,14 @@ export class LiquidationEngine extends EventEmitter {
 
   /**
    * Submits a partial liquidation market order for 20% of the position size.
+   * IMP-4: uses markPrice as the order price (previously hardcoded to 0n).
    * Design: the engine does not track remaining size — callers must pass the
    * updated position on each checkPositions() call.
    */
-  private async submitLiquidationOrder(pos: MarginPosition, _markPrice: bigint): Promise<void> {
+  private async submitLiquidationOrder(pos: MarginPosition, markPrice: bigint): Promise<void> {
+    // IMP-4 guard: if mark price is somehow 0 at this point, skip rather than submit a broken order
+    if (markPrice === 0n) return
+
     const LIQUIDATOR = '0x000000000000000000000000000000000000dead' as Hex
     const absSize = pos.size < 0n ? -pos.size : pos.size
     const partialAmount = absSize * 20n / 100n
@@ -195,7 +207,7 @@ export class LiquidationEngine extends EventEmitter {
       taker:        '0x0000000000000000000000000000000000000000' as Hex,
       baseToken:    pos.pairId.split('/')[0] as Hex,
       quoteToken:   pos.pairId.split('/')[1] as Hex,
-      price:        0n,
+      price:        markPrice,  // IMP-4: use current mark price (not 0n)
       amount,
       isBuy:        pos.size < 0n,   // short position → buy to close
       nonce:        now,

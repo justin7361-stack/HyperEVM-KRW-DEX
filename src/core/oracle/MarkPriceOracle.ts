@@ -111,4 +111,15 @@ export class MarkPriceOracle {
   getIndexPrice(pairId: string): bigint {
     return this.indexPrices.get(pairId) ?? this.getMarkPrice(pairId)
   }
+
+  /**
+   * Returns the mark price along with the timestamp of the most recent TWAP datapoint.
+   * Use this instead of getMarkPrice() when a staleness check is required (e.g., before
+   * triggering liquidations). ts=0 means no trade data has been recorded yet.
+   */
+  getMarkPriceWithTs(pairId: string): { price: bigint; ts: number } {
+    const history = this.prices.get(pairId)
+    const ts = history && history.length > 0 ? history[history.length - 1].ts : 0
+    return { price: this.getMarkPrice(pairId), ts }
+  }
 }
