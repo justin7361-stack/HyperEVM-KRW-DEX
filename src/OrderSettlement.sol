@@ -128,6 +128,17 @@ contract OrderSettlement is
     ///         Reference: Orderly Network distributed liquidator reward pattern.
     uint256 public liquidatorRewardBps;
 
+    /// @notice Agent wallet delegations (Hyperliquid pattern — S-3-2).
+    ///         agentOf[trader] = agent address that may sign orders on behalf of trader.
+    ///         One active agent per trader; overwritten by re-approval.
+    mapping(address => address) public agentOf;
+
+    /// @notice Emitted when a trader approves an agent wallet.
+    event AgentApproved(address indexed trader, address indexed agent);
+
+    /// @notice Emitted when a trader revokes their agent wallet.
+    event AgentRevoked(address indexed trader);
+
     /// @notice Emitted when a liquidation settlement is completed.
     /// @param maker  The address of the liquidated position owner.
     /// @param pairId Trading pair identifier (keccak256 of baseToken + quoteToken).
@@ -378,6 +389,29 @@ contract OrderSettlement is
                 }
             }
         }
+    }
+
+    // ─────────────────────────────────────────────
+    //  Agent Wallet Delegation (S-3-2 — Hyperliquid pattern)
+    // ─────────────────────────────────────────────
+
+    /// @notice Approve an agent wallet to sign orders on your behalf.
+    /// @dev    Agent must not be the caller. Overwrites any existing agent.
+    ///         Call revokeAgent() to remove delegation.
+    /// @param agent Address of the wallet to delegate signing to.
+    function approveAgent(address agent) external {
+        require(agent != address(0), "Zero agent");
+        require(agent != msg.sender,  "Agent cannot be self");
+        agentOf[msg.sender] = agent;
+        emit AgentApproved(msg.sender, agent);
+    }
+
+    /// @notice Revoke the current agent wallet delegation.
+    /// @dev    Reverts if no agent is set.
+    function revokeAgent() external {
+        require(agentOf[msg.sender] != address(0), "No agent set");
+        delete agentOf[msg.sender];
+        emit AgentRevoked(msg.sender);
     }
 
     /// @notice Cancel a single order nonce, preventing it from being filled.
@@ -817,9 +851,12 @@ contract OrderSettlement is
         }
     }
 
-    /// @dev Verifies an EIP-712 signature. Reverts with "Invalid maker signature" on failure.
-    function _verifySignature(address signer, bytes32 hash, bytes memory sig) internal pure {
-        require(ECDSA.recover(hash, sig) == signer, "Invalid maker signature");
+    /// @dev Verifies an EIP-712 signature.
+    ///      Accepts both direct signer and the signer's registered agent wallet (S-3-2).
+    ///      Reverts with "Invalid maker signature" on failure.
+    function _verifySignature(address signer, bytes32 hash, bytes memory sig) internal view {
+        address recovered = ECDSA.recover(hash, sig);
+        require(recovered == signer || recovered == agentOf[signer], "Invalid maker signature");
     }
 
     /// @dev Marks a nonce as used in the bitmap. Reverts if already used.
