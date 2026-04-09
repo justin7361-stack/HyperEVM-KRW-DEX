@@ -1,8 +1,8 @@
 # HyperKRW DEX — Session Todo
 
-**마지막 업데이트:** 2026-04-06 (세션 5 종료)
-**현재 상태:** Phase S-0 ~ S-2 전체 완료. 31 test files, 288 tests all passing. tsc --noEmit clean.
-**다음 세션 시작점:** S-3-1 (Distributed Liquidator) 또는 Phase Q (테스트넷 배포) 선택
+**마지막 업데이트:** 2026-04-09 (세션 6 종료)
+**현재 상태:** Phase S-0 ~ S-3 전체 완료. 34 test files, 311 tests all passing. tsc --noEmit clean. forge test 148/148 passing.
+**다음 세션 시작점:** Phase Q (테스트넷 배포) 시작 가능
 
 ---
 
@@ -158,17 +158,24 @@
 
 ---
 
-## 🔴 다음 작업: Phase S-3 또는 Phase Q 테스트넷 배포
+## ✅ 완료 — Phase S-3 (경쟁 패턴 2, 2026-04-09 세션 6)
 
-### S-3-1: Distributed Liquidator (Orderly 패턴) — 미구현
-- 외부 청산인이 청산 주문을 제출하고 보상을 받는 구조
-- contracts: LiquidatablePosition 공개 view + LiquidatorReward 이벤트 + liquidateExternal()
-- server: /liquidatable-positions GET 엔드포인트, LiquidationEngine에 외부 청산인 허용 로직
+| 태스크 | 레포 | 커밋 | 내용 |
+|-------|------|------|-----|
+| S-3-1: Distributed Liquidator | server `(see git log)` / contracts `(see git log)` | LiquidationEngine: getLiquidatablePositions() + triggerExternalLiquidation(), GET /liquidatable-positions, POST /liquidations, settleLiquidationWithReward(), liquidatorRewardBps 변수 + LiquidatorRewarded 이벤트, 11 tests |
+| S-3-2: Agent Wallet | server `02ed8d5` / contracts `31e09d2` | AgentWalletStore, AgentAwareVerifier, GET/POST/DELETE /auth/agent-wallet, agentOf mapping + approveAgent()/revokeAgent(), _verifySignature pure→view+agent fallback, 12+11 tests |
 
-### S-3-2: Agent Wallet (Hyperliquid 패턴) — 미구현
-- 트레이더가 에이전트 지갑에 서명 권한 위임
-- contracts: AgentWallet 허가 등록 매핑, EIP-712 서명 검증 시 위임 체크
-- server: POST /auth/agent-wallet, EIP712Verifier agent 검증 로직
+**검증 결과:**
+- `npx tsc --noEmit`: 에러 0개
+- `npx vitest run`: 34 파일, 311 테스트 all passed
+- `forge test`: 148/148 passing (contracts)
+- git push: server `02ed8d5`, contracts `31e09d2`
+
+**설계 결정사항:**
+- AgentAwareVerifier: step1(inner.verify) → step2(recoverTypedDataAddress), 단계적 검증
+- agentOf mapping: trader(msg.sender) → agent address, 1개만 유지, revokeAgent()로 삭제
+- _verifySignature: ECDSA.recover(hash, sig) == signer || == agentOf[signer] — 두 조건 중 하나면 통과
+- POST /auth/agent-wallet: off-chain only (chain interaction 없음), approveAgent()는 on-chain만 (독립)
 
 ---
 
