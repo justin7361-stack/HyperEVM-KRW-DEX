@@ -122,6 +122,12 @@ contract OrderSettlement is
     ///         address(0) = disabled (even if liquidationFeeBps > 0).
     address public liquidationInsuranceFund;
 
+    /// @notice Portion of the liquidation fee paid to the external liquidator (basis points).
+    ///         e.g. 2000 = 20% of the liquidation fee goes to the liquidator.
+    ///         Max 5000 (50%). Remainder goes to InsuranceFund.
+    ///         Reference: Orderly Network distributed liquidator reward pattern.
+    uint256 public liquidatorRewardBps;
+
     /// @notice Emitted when a liquidation settlement is completed.
     /// @param maker  The address of the liquidated position owner.
     /// @param pairId Trading pair identifier (keccak256 of baseToken + quoteToken).
@@ -141,6 +147,17 @@ contract OrderSettlement is
     /// @notice Emitted when the liquidation insurance fund address is updated by admin.
     /// @param newInsuranceFund New InsuranceFund contract address.
     event LiquidationInsuranceFundUpdated(address newInsuranceFund);
+
+    /// @notice Emitted when an external liquidator triggers a liquidation and earns a reward.
+    /// @param liquidator Address of the external liquidator.
+    /// @param pairId     Trading pair identifier.
+    /// @param token      Quote token used for the reward.
+    /// @param reward     Reward amount paid to the liquidator.
+    event LiquidatorRewarded(address indexed liquidator, bytes32 indexed pairId, address indexed token, uint256 reward);
+
+    /// @notice Emitted when the liquidator reward rate is updated.
+    /// @param newRewardBps New reward rate in basis points.
+    event LiquidatorRewardUpdated(uint256 newRewardBps);
 
     /// @notice Emitted when a matched order pair is filled on-chain.
     /// @param orderHash  EIP-712 hash of the maker order.
@@ -299,6 +316,34 @@ contract OrderSettlement is
         bytes calldata takerSig,
         uint256 markPrice
     ) external onlyRole(OPERATOR_ROLE) nonReentrant whenNotPaused {
+        _doSettleLiquidation(makerOrder, takerOrder, makerSig, takerSig, markPrice, address(0));
+    }
+
+    /// @notice Settle a liquidation triggered by an external liquidator.
+    ///         If liquidatorRewardBps > 0, a portion of the liquidation fee is paid to `liquidator`.
+    /// @param liquidator  Address of the external liquidator that triggered this liquidation.
+    ///                    Receives liquidatorRewardBps % of the liquidation fee.
+    function settleLiquidationWithReward(
+        Order calldata makerOrder,
+        Order calldata takerOrder,
+        bytes calldata makerSig,
+        bytes calldata takerSig,
+        uint256 markPrice,
+        address liquidator
+    ) external onlyRole(OPERATOR_ROLE) nonReentrant whenNotPaused {
+        require(liquidator != address(0), "Zero liquidator");
+        _doSettleLiquidation(makerOrder, takerOrder, makerSig, takerSig, markPrice, liquidator);
+    }
+
+    /// @dev Shared liquidation settlement logic.
+    function _doSettleLiquidation(
+        Order calldata makerOrder,
+        Order calldata takerOrder,
+        bytes calldata makerSig,
+        bytes calldata takerSig,
+        uint256 markPrice,
+        address liquidator
+    ) internal {
         // Liquidation slippage cap: execution price must be within ±5% of markPrice
         if (makerOrder.isLiquidation) {
             require(markPrice > 0, "markPrice required for liquidation");
@@ -318,6 +363,20 @@ contract OrderSettlement is
         if (makerOrder.isLiquidation) {
             bytes32 pairId = keccak256(abi.encodePacked(makerOrder.baseToken, makerOrder.quoteToken));
             emit LiquidationSettled(makerOrder.maker, pairId, fillAmt);
+
+            // Distributed liquidator reward: split liquidation fee between liquidator and InsuranceFund
+            if (liquidator != address(0) && liquidatorRewardBps > 0 && liquidationFeeBps > 0) {
+                uint256 totalFee = fillAmt * liquidationFeeBps / 10_000;
+                uint256 reward   = totalFee * liquidatorRewardBps / 10_000;
+                if (reward > 0) {
+                    SafeERC20.safeTransfer(
+                        IERC20(makerOrder.quoteToken),
+                        liquidator,
+                        reward
+                    );
+                    emit LiquidatorRewarded(liquidator, pairId, makerOrder.quoteToken, reward);
+                }
+            }
         }
     }
 
@@ -483,6 +542,14 @@ contract OrderSettlement is
     function setLiquidationInsuranceFund(address newInsuranceFund) external onlyRole(DEFAULT_ADMIN_ROLE) {
         liquidationInsuranceFund = newInsuranceFund;
         emit LiquidationInsuranceFundUpdated(newInsuranceFund);
+    }
+
+    /// @notice Set the liquidator reward rate (portion of liquidation fee to external liquidator).
+    /// @param newRewardBps Basis points. Max 5000 (50%). Set 0 to disable distributed liquidation.
+    function setLiquidatorRewardBps(uint256 newRewardBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(newRewardBps <= 5000, "Reward too high");
+        liquidatorRewardBps = newRewardBps;
+        emit LiquidatorRewardUpdated(newRewardBps);
     }
 
     /// @notice GUARDIAN can pause; only ADMIN can unpause (deliberate asymmetry).
