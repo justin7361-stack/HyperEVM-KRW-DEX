@@ -12,6 +12,21 @@ export interface LiquidationEvent {
 }
 
 /**
+ * A position eligible for liquidation, as returned by getLiquidatablePositions().
+ * Used by the distributed liquidator API (S-3-1 — Orderly pattern).
+ */
+export interface LiquidatablePosition {
+  maker:       string
+  pairId:      string
+  size:        bigint
+  margin:      bigint
+  minMargin:   bigint  // maintenance margin threshold
+  markPrice:   bigint
+  /** margin / minMargin — values < 1.0 are immediately liquidatable */
+  healthRatio: number
+}
+
+/**
  * A single ADL candidate entry, ready for submission to on-chain settleADL().
  * Ranked by ADL score; lower index = higher priority (deleveraged first).
  *
@@ -96,6 +111,81 @@ export class LiquidationEngine extends EventEmitter {
         }
       }
     }
+  }
+
+  /**
+   * Returns all positions currently eligible for liquidation (health < 1.0).
+   * Pure read — no side effects. Used by GET /liquidatable-positions.
+   */
+  getLiquidatablePositions(positions: MarginPosition[]): LiquidatablePosition[] {
+    const result: LiquidatablePosition[] = []
+    for (const pos of positions) {
+      if (pos.size === 0n) continue
+      const { price: markPrice, ts: markTs } = this.oracle.getMarkPriceWithTs(pos.pairId)
+      if (markPrice === 0n) continue
+      if (markTs > 0 && Date.now() - markTs > this.STALE_THRESHOLD_MS) continue
+      const absSize  = pos.size < 0n ? -pos.size : pos.size
+      const notional = absSize * markPrice / 10n ** 18n
+      const minMargin = notional * this.maintenanceMarginBps / 10000n
+      if (minMargin === 0n) continue
+      if (pos.margin < minMargin) {
+        result.push({
+          maker:      pos.maker,
+          pairId:     pos.pairId,
+          size:       pos.size,
+          margin:     pos.margin,
+          minMargin,
+          markPrice,
+          healthRatio: Number(pos.margin) / Number(minMargin),
+        })
+      }
+    }
+    return result
+  }
+
+  /**
+   * Trigger liquidation for a specific position from an external liquidator.
+   * Validates the position is liquidatable, then executes via existing logic.
+   * Returns true if liquidation was triggered, false if position is healthy.
+   */
+  async triggerExternalLiquidation(
+    pos:      MarginPosition,
+    liquidator: string,
+  ): Promise<{ triggered: boolean; reason: string }> {
+    if (pos.size === 0n) return { triggered: false, reason: 'position is flat' }
+
+    const { price: markPrice, ts: markTs } = this.oracle.getMarkPriceWithTs(pos.pairId)
+    if (markPrice === 0n) return { triggered: false, reason: 'no mark price' }
+    if (markTs > 0 && Date.now() - markTs > this.STALE_THRESHOLD_MS) {
+      return { triggered: false, reason: 'mark price stale' }
+    }
+
+    const absSize   = pos.size < 0n ? -pos.size : pos.size
+    const notional  = absSize * markPrice / 10n ** 18n
+    const minMargin = notional * this.maintenanceMarginBps / 10000n
+
+    if (pos.margin >= minMargin) {
+      return { triggered: false, reason: `position healthy (margin ${pos.margin} >= minMargin ${minMargin})` }
+    }
+
+    // Position is liquidatable — execute via existing internal logic
+    const posKey = `${pos.maker}:${pos.pairId}`
+    const step = (this.liquidationSteps.get(posKey) ?? 0) + 1
+    this.liquidationSteps.set(posKey, step)
+    if (step >= 5) this.liquidationSteps.delete(posKey)
+
+    this.emit('liquidation', {
+      position: pos, markPrice,
+      reason: `external liquidator ${liquidator} (step ${step}/5)`,
+    } satisfies LiquidationEvent)
+    await this.submitLiquidationOrder(pos, markPrice)
+
+    if (this.insuranceFund) {
+      const estimatedLoss = minMargin - pos.margin
+      if (estimatedLoss > 0n) void this.insuranceFund.cover(pos.pairId, estimatedLoss)
+    }
+
+    return { triggered: true, reason: `liquidated at step ${step}/5` }
   }
 
   resetSteps(maker: string, pairId: string): void {

@@ -38,6 +38,8 @@ import { circuitBreakerAdminRoutes } from './routes/admin.js'
 import type { WalletRateLimiter } from '../core/matching/WalletRateLimiter.js'
 import type { CancelAfterManager } from '../core/matching/CancelAfterManager.js'
 import type { IInsuranceFund } from '../core/insurance/InsuranceFund.js'
+import type { LiquidationEngine } from '../core/liquidation/LiquidationEngine.js'
+import { liquidationsRoutes } from './routes/liquidations.js'
 
 export async function buildServer(deps: {
   config:              Config
@@ -63,6 +65,7 @@ export async function buildServer(deps: {
   walletRateLimiter?:   WalletRateLimiter
   cancelAfterManager?:  CancelAfterManager
   insuranceFund?:       IInsuranceFund
+  liquidationEngine?:   LiquidationEngine
 }) {
   const { config, verifier, policy, matching, store, trades, pairRegistry, worker, blocklist } = deps
   const fastify = Fastify({ logger: true })
@@ -143,6 +146,11 @@ export async function buildServer(deps: {
       deps.getMarkPrice,
       deps.insuranceFund,
     ))
+  }
+
+  // Distributed liquidator endpoints (S-3-1)
+  if (deps.liquidationEngine && deps.positionTracker) {
+    fastify.register(liquidationsRoutes(deps.liquidationEngine, deps.positionTracker))
   }
 
   // Circuit breaker admin endpoints
