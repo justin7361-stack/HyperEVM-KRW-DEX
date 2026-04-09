@@ -40,6 +40,8 @@ import type { CancelAfterManager } from '../core/matching/CancelAfterManager.js'
 import type { IInsuranceFund } from '../core/insurance/InsuranceFund.js'
 import type { LiquidationEngine } from '../core/liquidation/LiquidationEngine.js'
 import { liquidationsRoutes } from './routes/liquidations.js'
+import type { AgentWalletStore } from '../verification/AgentWalletStore.js'
+import { agentWalletRoutes } from './routes/agentWallet.js'
 
 export async function buildServer(deps: {
   config:              Config
@@ -66,6 +68,7 @@ export async function buildServer(deps: {
   cancelAfterManager?:  CancelAfterManager
   insuranceFund?:       IInsuranceFund
   liquidationEngine?:   LiquidationEngine
+  agentWalletStore?:    AgentWalletStore
 }) {
   const { config, verifier, policy, matching, store, trades, pairRegistry, worker, blocklist } = deps
   const fastify = Fastify({ logger: true })
@@ -151,6 +154,11 @@ export async function buildServer(deps: {
   // Distributed liquidator endpoints (S-3-1)
   if (deps.liquidationEngine && deps.positionTracker) {
     fastify.register(liquidationsRoutes(deps.liquidationEngine, deps.positionTracker))
+  }
+
+  // Agent wallet delegation endpoints (S-3-2)
+  if (deps.agentWalletStore) {
+    fastify.register(agentWalletRoutes(deps.agentWalletStore))
   }
 
   // Circuit breaker admin endpoints

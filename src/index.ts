@@ -4,6 +4,8 @@ import { createClients } from './chain/contracts.js'
 import { createOperatorWallet } from './chain/wallet.js'
 import { createVaultClient } from './chain/vaultClient.js'
 import { EIP712Verifier } from './verification/EIP712Verifier.js'
+import { AgentWalletStore } from './verification/AgentWalletStore.js'
+import { AgentAwareVerifier } from './verification/AgentAwareVerifier.js'
 import { PolicyEngine } from './compliance/PolicyEngine.js'
 import { BasicBlocklistPlugin } from './compliance/plugins/BasicBlocklistPlugin.js'
 import { GeoBlockPlugin } from './compliance/plugins/GeoBlockPlugin.js'
@@ -62,7 +64,8 @@ const domain = {
   verifyingContract: config.orderSettlementAddress,
 }
 
-const verifier  = new EIP712Verifier(domain)
+const agentWalletStore = new AgentWalletStore()
+const verifier  = new AgentAwareVerifier(new EIP712Verifier(domain), agentWalletStore, domain)
 const policy    = new PolicyEngine()
 const store     = new MemoryOrderBookStore()
 const trades    = new TradeStore()
@@ -284,6 +287,7 @@ const server = await buildServer({
   cancelAfterManager,
   insuranceFund,
   liquidationEngine,
+  agentWalletStore,
 })
 
 server.listen({ port: config.port, host: config.host }, (err) => {
